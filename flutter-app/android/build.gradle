@@ -1,0 +1,35 @@
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.buildDir = "../build"
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
+subprojects {
+    project.evaluationDependsOn(":app")
+}
+subprojects { project ->
+    if (project.name != "app") {
+        project.afterEvaluate { p ->
+            if (p.hasProperty('android')) {
+                p.android {
+                    if (compileSdk == null) {
+                        compileSdk 35
+                    }
+                    if (defaultConfig.minSdkVersion == null || defaultConfig.minSdkVersion.apiLevel < 21) {
+                        defaultConfig.minSdkVersion 21
+                    }
+                    ndkVersion "28.2.13676358"
+                }
+            }
+        }
+    }
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
