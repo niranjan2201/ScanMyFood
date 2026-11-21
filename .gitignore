@@ -71,9 +71,10 @@ spring-backend/*.log
 spring-backend/src/main/resources/firebase-service-account.json
 
 
-# SQL Queries/Schemas specific
-
-spring-backend/src/main/resources/*.sql
+# SQL Queries/Schemas specific — keep schema.sql but ignore data/seed files
+# spring-backend/src/main/resources/*.sql
+spring-backend/src/main/resources/data.sql
+spring-backend/src/main/resources/seed*.sql
 
 # IDE specific
 
