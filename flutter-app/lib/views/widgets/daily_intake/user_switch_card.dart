@@ -25,7 +25,10 @@ class UserSwitchCard extends StatelessWidget {
     debugPrint('REBUILD: UserSwitchCard');
     final User? user =
         context.read<DailyIntakeViewModel>().authService.currentUser;
-    final displayName = user?.displayName ?? 'Nikhilesh Meher';
+    final rawName = user?.displayName?.trim();
+    final displayName = (rawName != null && rawName.isNotEmpty && rawName != 'Nikhilesh Meher')
+        ? rawName
+        : 'Champ';
     final photoURL = user?.photoURL ?? 'https://www.gravatar.com/avatar/placeholder';
     
     // Representative background color for the saturated sunset orange header region

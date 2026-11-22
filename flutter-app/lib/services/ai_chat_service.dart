@@ -1,5 +1,6 @@
 import 'dart:async';
-import 'package:firebase_ai/firebase_ai.dart' as fbai;
+import 'package:google_generative_ai/google_generative_ai.dart' as fbai;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:genui/genui.dart' hide TextPart;
 import 'package:genui/genui.dart' as genui;
 import 'package:uuid/uuid.dart';
@@ -66,10 +67,14 @@ class AiChatService {
       mealScanContext: mealScanContext,
     );
 
-    final model = fbai.FirebaseAI.vertexAI().generativeModel(
-      model: 'gemini-2.5-flash',
+    final apiKey = dotenv.env['GEMINI_API_KEY'] ??
+        const String.fromEnvironment('GEMINI_API_KEY');
+
+    final model = fbai.GenerativeModel(
+      model: 'gemini-3.5-flash',
+      apiKey: apiKey,
       systemInstruction: fbai.Content.system(systemPrompt),
-      tools: [fbai.Tool.functionDeclarations(AiToolDeclarations.all)],
+      tools: [fbai.Tool(functionDeclarations: AiToolDeclarations.all)],
     );
 
     // Load past messages from database
@@ -127,13 +132,15 @@ class AiChatService {
 
           // Emit start event
           final humanLabel = AiToolDeclarations.humanLabel(toolName, args);
-          _stepEventsController.add(AgentStepEvent(
-            sessionId: sessionId,
-            toolName: toolName,
-            label: humanLabel,
-            isRunning: true,
-            timestamp: DateTime.now(),
-          ));
+          _stepEventsController.add(
+            AgentStepEvent(
+              sessionId: sessionId,
+              toolName: toolName,
+              label: humanLabel,
+              isRunning: true,
+              timestamp: DateTime.now(),
+            ),
+          );
 
           Map<String, Object?> result;
           bool success = true;
@@ -146,14 +153,16 @@ class AiChatService {
           }
 
           // Emit completed event
-          _stepEventsController.add(AgentStepEvent(
-            sessionId: sessionId,
-            toolName: toolName,
-            label: success ? humanLabel : 'Failed',
-            isRunning: false,
-            success: success,
-            timestamp: DateTime.now(),
-          ));
+          _stepEventsController.add(
+            AgentStepEvent(
+              sessionId: sessionId,
+              toolName: toolName,
+              label: success ? humanLabel : 'Failed',
+              isRunning: false,
+              success: success,
+              timestamp: DateTime.now(),
+            ),
+          );
 
           functionResponses.add(fbai.FunctionResponse(toolName, result));
         }

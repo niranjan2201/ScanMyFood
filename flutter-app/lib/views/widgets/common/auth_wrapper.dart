@@ -48,10 +48,14 @@ class _AuthWrapperState extends State<AuthWrapper> {
       if (userCheckResponse.isNewUser) {
         logger.i(
             "AuthWrapper: User is new, creating record and going to onboarding");
+        final rawName = user.displayName?.trim();
+        final effectiveName = (rawName != null && rawName.isNotEmpty && rawName != 'Nikhilesh Meher')
+            ? rawName
+            : "Champ";
         await userRepository.createUser(
           user.uid,
           user.email ?? "",
-          user.displayName ?? "",
+          effectiveName,
         );
         return const OnboardingFoodPreferenceScreen();
       }

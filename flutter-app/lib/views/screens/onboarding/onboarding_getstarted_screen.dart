@@ -41,8 +41,8 @@ class _OnboardingGetstartedScreenState extends State<OnboardingGetstartedScreen>
     );
 
     _heightAnimation = Tween<double>(
-      begin: 0.28, // Height factor when collapsed
-      end: 0.60, // Height factor when expanded
+      begin: 0.38, // Height factor when collapsed (ensures Get Started button is fully visible above system bar)
+      end: 0.72, // Height factor when expanded
     ).animate(
       CurvedAnimation(
         parent: _animationController,
@@ -327,11 +327,13 @@ class _OnboardingGetstartedScreenState extends State<OnboardingGetstartedScreen>
             child: AnimatedBuilder(
               animation: _heightAnimation,
               builder: (context, child) {
+                final bottomPadding = MediaQuery.of(context).padding.bottom;
+                final computedHeight = size.height * _heightAnimation.value + bottomPadding;
                 return Container(
-                  height: size.height * _heightAnimation.value,
+                  height: computedHeight,
                   constraints: BoxConstraints(
-                    // Ensure the container doesn't exceed 80% of screen height
-                    maxHeight: size.height * 0.8,
+                    minHeight: 290 + bottomPadding,
+                    maxHeight: size.height * 0.85,
                   ),
                   decoration: const BoxDecoration(
                     color: AppColors.primaryBlack,
@@ -340,15 +342,13 @@ class _OnboardingGetstartedScreenState extends State<OnboardingGetstartedScreen>
                         topRight: Radius.circular(30)),
                   ),
                   child: SingleChildScrollView(
-                    physics: _expanded
-                        ? const BouncingScrollPhysics()
-                        : const NeverScrollableScrollPhysics(),
+                    physics: const BouncingScrollPhysics(),
                     child: Padding(
                       padding: EdgeInsets.only(
                         left: 24.0,
                         right: 24.0,
-                        top: 32.0,
-                        bottom: MediaQuery.of(context).padding.bottom,
+                        top: 24.0,
+                        bottom: bottomPadding + 20.0,
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
