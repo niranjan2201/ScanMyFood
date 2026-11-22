@@ -6,6 +6,7 @@ import 'package:read_the_label/theme/app_colors.dart';
 import 'package:read_the_label/theme/app_text_styles.dart';
 import 'package:read_the_label/viewmodels/daily_intake_view_model.dart';
 import 'package:read_the_label/views/widgets/common/rolling_text.dart';
+import 'package:read_the_label/views/widgets/daily_intake/edit_nutrient_goals_sheet.dart';
 
 class CalorieCard extends StatelessWidget {
   const CalorieCard({super.key});
@@ -13,9 +14,13 @@ class CalorieCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     debugPrint('REBUILD: CalorieCard');
-    const calorieGoal = 2000.0;
+    final calorieGoal = context.select(
+      (DailyIntakeViewModel vm) => vm.calorieGoal,
+    );
 
-    return Container(
+    return GestureDetector(
+      onTap: () => EditNutrientGoalsSheet.show(context),
+      child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
       decoration: BoxDecoration(
         color: AppColors.cardBackground,
@@ -190,6 +195,7 @@ class CalorieCard extends StatelessWidget {
           ),
         ],
       ),
+    ),
     );
   }
 }

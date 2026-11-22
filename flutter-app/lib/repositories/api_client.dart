@@ -151,6 +151,36 @@ class ApiClient {
     }
   }
 
+  Future<Map<String, dynamic>> delete(String endpoint) async {
+    try {
+      final uri = Uri.parse('$baseUrl$endpoint');
+      logger.d("Making DELETE request to: $uri");
+      final response = await http.delete(
+        uri,
+        headers: await getRequestHeaders(),
+      );
+
+      logger.d("DELETE Response status code: ${response.statusCode}");
+      logger.d("DELETE Response body: ${response.body}");
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        if (response.body.isEmpty) {
+          return {};
+        }
+        try {
+          return jsonDecode(response.body);
+        } catch (e) {
+          return {"rawResponse": response.body};
+        }
+      } else {
+        _throwApiException(response);
+      }
+    } catch (e) {
+      logger.d("API DELETE call error: $e");
+      rethrow;
+    }
+  }
+
   /// Parses the backend [ErrorResponse] body and throws a typed [ApiException].
   /// Falls back to [ApiException.raw] if the body is not valid JSON.
   Never _throwApiException(http.Response response) {

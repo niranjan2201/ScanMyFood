@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:read_the_label/core/constants/app_constants.dart';
 import 'package:read_the_label/core/constants/dv_values.dart';
 import 'package:read_the_label/core/constants/nutrient_insights.dart';
@@ -50,6 +51,17 @@ class DailyIntakeViewModel extends BaseViewModel {
   String _descriptionText = "";
   bool _isImageGenerating = false;
 
+  // Nutrient Goals State (defaults: Calories 2000, Protein 50g, Carbs 275g, Fat 78g)
+  double _calorieGoal = 2000.0;
+  double _proteinGoal = 50.0;
+  double _carbsGoal = 275.0;
+  double _fatGoal = 78.0;
+
+  double get calorieGoal => _calorieGoal;
+  double get proteinGoal => _proteinGoal;
+  double get carbsGoal => _carbsGoal;
+  double get fatGoal => _fatGoal;
+
   // Caching State
   final Map<String, DailyIntakeData> _dailyIntakeCache = {};
   List<DailyIntakeRecord>? _currentDailyIntake;
@@ -89,7 +101,87 @@ class DailyIntakeViewModel extends BaseViewModel {
     required this.toolClient,
   }) {
     loadCacheFromDevice();
+    loadNutrientGoals();
     _subscribeToMealLogging();
+  }
+
+  Future<void> loadNutrientGoals() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _calorieGoal = prefs.getDouble('user_goal_calories') ?? 2000.0;
+      _proteinGoal = prefs.getDouble('user_goal_protein') ?? 50.0;
+      _carbsGoal = prefs.getDouble('user_goal_carbs') ?? 275.0;
+      _fatGoal = prefs.getDouble('user_goal_fat') ?? 78.0;
+      notifyListeners();
+    } catch (e) {
+      debugPrint("Failed to load nutrient goals: $e");
+    }
+  }
+
+  Future<void> updateNutrientGoals({
+    double? calories,
+    double? protein,
+    double? carbs,
+    double? fat,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (calories != null && calories > 0) {
+        _calorieGoal = calories;
+        await prefs.setDouble('user_goal_calories', calories);
+      }
+      if (protein != null && protein > 0) {
+        _proteinGoal = protein;
+        await prefs.setDouble('user_goal_protein', protein);
+      }
+      if (carbs != null && carbs > 0) {
+        _carbsGoal = carbs;
+        await prefs.setDouble('user_goal_carbs', carbs);
+      }
+      if (fat != null && fat > 0) {
+        _fatGoal = fat;
+        await prefs.setDouble('user_goal_fat', fat);
+      }
+      notifyListeners();
+    } catch (e) {
+      debugPrint("Failed to save nutrient goals: $e");
+    }
+  }
+
+  Future<void> resetNutrientGoalsToDefaults() async {
+    await updateNutrientGoals(
+      calories: 2000.0,
+      protein: 50.0,
+      carbs: 275.0,
+      fat: 78.0,
+    );
+  }
+
+  Future<bool> deleteIntake(int dailyIntakeId) async {
+    final uid = authService.currentUser?.uid ?? "VzvYVBFUlxP0apdJmkGdO0XzDe82";
+    try {
+      setLoading(true);
+      final success = await intakeRepository.deleteIntake(uid, dailyIntakeId);
+      if (success) {
+        // Remove item from cache for all dates
+        for (var dayData in _dailyIntakeCache.values) {
+          dayData.dailyIntake.removeWhere((item) => item.id == dailyIntakeId);
+        }
+        // Update current selected date data
+        _setSelectedDateData();
+        await saveCacheToDevice();
+        // Also refresh intake from backend
+        await refreshDailyIntake();
+        notifyListeners();
+        return true;
+      }
+      return false;
+    } catch (e) {
+      setError("Failed to delete intake: $e");
+      return false;
+    } finally {
+      setLoading(false);
+    }
   }
 
   void _subscribeToMealLogging() {

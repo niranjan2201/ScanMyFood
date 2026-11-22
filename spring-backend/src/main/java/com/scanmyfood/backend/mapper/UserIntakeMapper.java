@@ -229,5 +229,13 @@ public interface UserIntakeMapper {
             @Param("canonicalMealName") String canonicalMealName
     );
 
+    int deleteFoodItemsByDailyIntakeId(
+            @Param("dailyIntakeId") Integer dailyIntakeId
+    );
+
+    int deleteDailyIntake(
+            @Param("userId") String userId,
+            @Param("dailyIntakeId") Integer dailyIntakeId
+    );
 
 }

@@ -508,4 +508,18 @@ public class UserIntakeServiceImpl implements UserIntakeService {
         return (unit != null && !unit.trim().isEmpty()) ? unit : defaultUnit;
     }
 
+    @Override
+    public boolean deleteIntake(String userId, int dailyIntakeId) throws Exception {
+        log.info("Deleting daily intake id: {} for user: {}", dailyIntakeId, userId);
+        try {
+            userIntakeMapper.deleteFoodItemsByDailyIntakeId(dailyIntakeId);
+            int rowsDeleted = userIntakeMapper.deleteDailyIntake(userId, dailyIntakeId);
+            log.info("Deleted daily intake record id: {}, rows affected: {}", dailyIntakeId, rowsDeleted);
+            return rowsDeleted > 0;
+        } catch (Exception e) {
+            log.error("Failed to delete daily intake id {}: {}", dailyIntakeId, e.getMessage(), e);
+            throw e;
+        }
+    }
+
 }

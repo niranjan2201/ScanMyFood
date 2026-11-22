@@ -212,4 +212,16 @@ class IntakeRepository implements IntakeRepositoryInterface {
       throw Exception('Error analyzing food description: $e');
     }
   }
+
+  @override
+  Future<bool> deleteIntake(String userId, int dailyIntakeId) async {
+    try {
+      final response = await _apiClient.delete(
+        '/users/intake/$dailyIntakeId?userId=$userId',
+      );
+      return response['status'] == 'success';
+    } catch (e) {
+      throw Exception('Error deleting intake: $e');
+    }
+  }
 }

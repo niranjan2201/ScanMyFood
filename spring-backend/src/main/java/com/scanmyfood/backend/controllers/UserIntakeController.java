@@ -115,4 +115,26 @@ public class UserIntakeController {
         return ResponseEntity.ok(ApiResponse.success(intakeDetails, ResponseCodeConstants.INTAKE_ITEM_FETCHED, "Intake item fetched successfully"));
     }
 
+    @DeleteMapping("/{dailyIntakeId}")
+    public ResponseEntity<ApiResponse<Boolean>> deleteIntakePath(
+            @PathVariable("dailyIntakeId") int dailyIntakeId,
+            @RequestHeader(value = "X-User-Id", required = false) String headerUserId,
+            @RequestParam(value = "userId", required = false) String paramUserId) throws Exception {
+        String userId = (headerUserId != null && !headerUserId.trim().isEmpty()) ? headerUserId : paramUserId;
+        log.info("Deleting intake id: {} for user: {}", dailyIntakeId, userId);
+        boolean deleted = userIntakeService.deleteIntake(userId, dailyIntakeId);
+        return ResponseEntity.ok(ApiResponse.success(deleted, "INTAKE_DELETED", "Food intake deleted successfully"));
+    }
+
+    @DeleteMapping("/record")
+    public ResponseEntity<ApiResponse<Boolean>> deleteIntakeParam(
+            @RequestParam("dailyIntakeId") int dailyIntakeId,
+            @RequestHeader(value = "X-User-Id", required = false) String headerUserId,
+            @RequestParam(value = "userId", required = false) String paramUserId) throws Exception {
+        String userId = (headerUserId != null && !headerUserId.trim().isEmpty()) ? headerUserId : paramUserId;
+        log.info("Deleting intake id: {} for user: {}", dailyIntakeId, userId);
+        boolean deleted = userIntakeService.deleteIntake(userId, dailyIntakeId);
+        return ResponseEntity.ok(ApiResponse.success(deleted, "INTAKE_DELETED", "Food intake deleted successfully"));
+    }
+
 }

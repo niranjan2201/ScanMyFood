@@ -18,4 +18,6 @@ abstract class IntakeRepositoryInterface {
 
   Future<FoodAnalysisResponse> getIntakeDetails(
       String userId, int dailyIntakeId);
+
+  Future<bool> deleteIntake(String userId, int dailyIntakeId);
 }

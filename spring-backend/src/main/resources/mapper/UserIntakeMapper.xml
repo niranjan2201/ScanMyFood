@@ -330,4 +330,17 @@
         LIMIT 1
     </select>
 
+    <delete id="deleteFoodItemsByDailyIntakeId">
+        DELETE FROM food_item
+        WHERE daily_intake_id = #{dailyIntakeId}
+    </delete>
+
+    <delete id="deleteDailyIntake">
+        DELETE FROM daily_intake
+        WHERE id = #{dailyIntakeId}
+        <if test="userId != null and userId != ''">
+            AND user_id = #{userId}
+        </if>
+    </delete>
+
 </mapper>

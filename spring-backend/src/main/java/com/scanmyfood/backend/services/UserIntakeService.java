@@ -22,4 +22,6 @@ public interface UserIntakeService {
     public void updateDailyIntakeImage(int dailyIntakeId, String imageAccessUrl) throws Exception;
 
     public FoodAnalysisResponse getIntakeDetails(String userId, int dailyIntakeId) throws Exception;
+
+    public boolean deleteIntake(String userId, int dailyIntakeId) throws Exception;
 }
