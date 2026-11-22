@@ -40,8 +40,11 @@ public class ToolExecutionController {
     public ResponseEntity<ApiResponse<Map<String, Object>>> executeTool(
             @PathVariable String toolName,
             @RequestBody Map<String, Object> args,
-            @RequestHeader("X-User-Id") String userId) {
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
         
+        if (userId == null || userId.trim().isEmpty()) {
+            userId = "guest_user";
+        }
         log.info("Executing tool: {} for userId: {}", toolName, userId);
 
         try {

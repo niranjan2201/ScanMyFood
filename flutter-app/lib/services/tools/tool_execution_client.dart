@@ -15,20 +15,24 @@ class ToolExecutionClient {
     String toolName,
     Map<String, dynamic> args,
   ) async {
-    final response = await _apiClient.post(
-      '/tools/$toolName/execute',
-      args,
-    );
-    // The response has the shape ApiResponse<Map<String, Object>>
-    // where data is the map we returned
-    if (response['status'] == 'success' && response['data'] != null) {
-      final data = Map<String, Object?>.from(response['data'] as Map);
-      if (toolName == 'saveScannedFoodIntake' && data['success'] == true) {
-        _mealLoggedController.add(null);
+    try {
+      final response = await _apiClient.post(
+        '/tools/$toolName/execute',
+        args,
+      );
+      // The response has the shape ApiResponse<Map<String, Object>>
+      // where data is the map we returned
+      if (response['status'] == 'success' && response['data'] != null) {
+        final data = Map<String, Object?>.from(response['data'] as Map);
+        if (toolName == 'saveScannedFoodIntake' && data['success'] == true) {
+          _mealLoggedController.add(null);
+        }
+        return data;
       }
-      return data;
+      return Map<String, Object?>.from(response);
+    } catch (e) {
+      return {'status': 'error', 'message': e.toString()};
     }
-    return {};
   }
 
   void dispose() {

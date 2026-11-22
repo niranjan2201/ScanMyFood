@@ -1,102 +1,79 @@
-import 'package:google_generative_ai/google_generative_ai.dart' as fbai;
-
 class AiToolDeclarations {
-  static List<fbai.FunctionDeclaration> get all => [
-        fbai.FunctionDeclaration(
-          'getUserProfile',
-          'Fetches the user\'s health profile including weight, height, BMI, dietary preferences, health conditions, and fitness goals. No PII is returned.',
-          null,
-        ),
-        fbai.FunctionDeclaration(
-          'getDailyIntake',
-          'Fetches the user\'s logged meals and daily nutrient intake summary for a given date range.',
-          fbai.Schema.object(
-            properties: {
-              'from_date': fbai.Schema.string(
-                description: 'The start date for the query in YYYY-MM-DD format.',
-              ),
-              'to_date': fbai.Schema.string(
-                description: 'The end date for the query in YYYY-MM-DD format.',
-              ),
+  static List<Map<String, dynamic>> get restTools => [
+        {
+          'function_declarations': [
+            {
+              'name': 'getUserProfile',
+              'description':
+                  'Fetches the user\'s health profile including weight, height, BMI, dietary preferences, health conditions, and fitness goals. No PII is returned.',
+              'parameters': {
+                'type': 'OBJECT',
+                'properties': <String, dynamic>{},
+              },
             },
-          ),
-        ),
-        fbai.FunctionDeclaration(
-          'logMealViaDescription',
-          'Analyzes a natural language meal description to extract nutritional data and saves it as a meal intake record. Returns the meal details.',
-          fbai.Schema.object(
-            properties: {
-              'description': fbai.Schema.string(
-                description: 'Natural language description of the meal (e.g. "2 eggs and toast with butter")',
-              ),
-            },
-          ),
-        ),
-        fbai.FunctionDeclaration(
-          'saveScannedFoodIntake',
-          'Saves the analyzed meal details into the user\'s daily intake log. Call this only after the user explicitly confirms they want to log the meal.',
-          fbai.Schema.object(
-            properties: {
-              'food_analysis_response': fbai.Schema.object(
-                description: 'The food analysis response details to save',
-                properties: {
-                  'meal_name': fbai.Schema.string(description: 'Name of the meal'),
-                  'analyzed_food_items': fbai.Schema.array(
-                    description: 'List of individual food items analyzed',
-                    items: fbai.Schema.object(
-                      properties: {
-                        'name': fbai.Schema.string(description: 'Name of the food item'),
-                        'canonical_name': fbai.Schema.string(description: 'Canonical English name in snake_case'),
-                        'quantity': fbai.Schema.object(
-                          properties: {
-                            'value': fbai.Schema.number(description: 'Value of the quantity'),
-                            'unit': fbai.Schema.string(description: 'Unit of measurement, e.g. g'),
-                          },
-                        ),
-                        'nutrients': fbai.Schema.array(
-                          items: fbai.Schema.object(
-                            properties: {
-                              'name': fbai.Schema.string(
-                                description: 'Name of nutrient. Must be exactly one of: calories, protein, total_carbohydrate, total_fat, dietary_fiber, total_sugars, sodium.',
-                              ),
-                              'quantity': fbai.Schema.object(
-                                properties: {
-                                  'value': fbai.Schema.number(description: 'Value'),
-                                  'unit': fbai.Schema.string(description: 'Unit'),
-                                },
-                              ),
-                            },
-                          ),
-                        ),
-                      },
-                    ),
-                  ),
-                  'total_plate_nutrients': fbai.Schema.array(
-                    items: fbai.Schema.object(
-                      properties: {
-                        'name': fbai.Schema.string(
-                          description: 'Name of nutrient. Must be exactly one of: calories, protein, total_carbohydrate, total_fat, dietary_fiber, total_sugars, sodium.',
-                        ),
-                        'quantity': fbai.Schema.object(
-                          properties: {
-                            'value': fbai.Schema.number(description: 'Value'),
-                            'unit': fbai.Schema.string(description: 'Unit'),
-                          },
-                        ),
-                      },
-                    ),
-                  ),
+            {
+              'name': 'getDailyIntake',
+              'description':
+                  'Fetches the user\'s logged meals and daily nutrient intake summary for a given date range.',
+              'parameters': {
+                'type': 'OBJECT',
+                'properties': {
+                  'from_date': {
+                    'type': 'STRING',
+                    'description':
+                        'The start date for the query in YYYY-MM-DD format.',
+                  },
+                  'to_date': {
+                    'type': 'STRING',
+                    'description':
+                        'The end date for the query in YYYY-MM-DD format.',
+                  },
                 },
-              ),
-              'source_of_intake': fbai.Schema.string(
-                description: 'The source of the intake, e.g., "SD" for scanned description.',
-              ),
-              'created_at': fbai.Schema.string(
-                description: 'The ISO-8601 consumed date and time (e.g. "2026-07-02T12:00:00"). Optional, defaults to now.',
-              ),
+              },
             },
-          ),
-        ),
+            {
+              'name': 'logMealViaDescription',
+              'description':
+                  'Analyzes a natural language meal description to extract nutritional data and saves it as a meal intake record. Returns the meal details.',
+              'parameters': {
+                'type': 'OBJECT',
+                'properties': {
+                  'description': {
+                    'type': 'STRING',
+                    'description':
+                        'Natural language description of the meal (e.g. "2 eggs and toast with butter")',
+                  },
+                },
+                'required': ['description'],
+              },
+            },
+            {
+              'name': 'saveScannedFoodIntake',
+              'description':
+                  'Saves the analyzed meal details into the user\'s daily intake log. Call this only after the user explicitly confirms they want to log the meal.',
+              'parameters': {
+                'type': 'OBJECT',
+                'properties': {
+                  'food_analysis_response': {
+                    'type': 'OBJECT',
+                    'description': 'The food analysis response details to save',
+                  },
+                  'source_of_intake': {
+                    'type': 'STRING',
+                    'description':
+                        'The source of the intake, e.g., "SD" for scanned description.',
+                  },
+                  'created_at': {
+                    'type': 'STRING',
+                    'description':
+                        'The ISO-8601 consumed date and time (e.g. "2026-07-02T12:00:00"). Optional, defaults to now.',
+                  },
+                },
+                'required': ['food_analysis_response'],
+              },
+            },
+          ],
+        },
       ];
 
   static String humanLabel(String toolName, Map<String, dynamic> args) {

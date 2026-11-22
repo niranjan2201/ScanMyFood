@@ -1,5 +1,6 @@
 import 'dart:async';
-import 'package:google_generative_ai/google_generative_ai.dart' as fbai;
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:genui/genui.dart' hide TextPart;
 import 'package:genui/genui.dart' as genui;
@@ -32,70 +33,89 @@ class AgentStepEvent {
 class AiChatService {
   static final AiChatService instance = AiChatService._init();
 
-  final _activeSessions = <String, fbai.ChatSession>{};
+  final _activeHistories = <String, List<Map<String, dynamic>>>{};
   final _stepEventsController = StreamController<AgentStepEvent>.broadcast();
 
   AiChatService._init();
 
   Stream<AgentStepEvent> get stepEvents => _stepEventsController.stream;
 
-  fbai.Content _chatMessageToFirebaseContent(ChatMessage msg) {
-    final parts = <fbai.Part>[];
+  Map<String, dynamic> _chatMessageToRestContent(ChatMessage msg) {
+    final parts = <Map<String, dynamic>>[];
     for (final part in msg.parts) {
       if (part is genui.TextPart) {
-        parts.add(fbai.TextPart(part.text));
+        parts.add({'text': part.text});
       }
     }
-    return fbai.Content(
-      msg.role == ChatMessageRole.user ? 'user' : 'model',
-      parts,
-    );
+    return {
+      'role': msg.role == ChatMessageRole.user ? 'user' : 'model',
+      'parts': parts,
+    };
   }
 
-  Future<fbai.ChatSession> _getOrCreateChatSession(
-    String sessionId, {
-    String? mealScanContext,
-    UserProfile? profile,
-  }) async {
-    if (_activeSessions.containsKey(sessionId)) {
-      return _activeSessions[sessionId]!;
+  Future<List<Map<String, dynamic>>> _getOrCreateHistory(
+    String sessionId,
+  ) async {
+    if (_activeHistories.containsKey(sessionId)) {
+      return _activeHistories[sessionId]!;
     }
 
-    // Build system instruction
-    final systemPrompt = AiContextBuilder.buildSystemPrompt(
-      profile: profile,
-      mealScanContext: mealScanContext,
-    );
-
-    final apiKey = dotenv.env['GEMINI_API_KEY'] ??
-        const String.fromEnvironment('GEMINI_API_KEY');
-
-    final model = fbai.GenerativeModel(
-      model: 'gemini-3.5-flash',
-      apiKey: apiKey,
-      systemInstruction: fbai.Content.system(systemPrompt),
-      tools: [fbai.Tool(functionDeclarations: AiToolDeclarations.all)],
-    );
-
-    // Load past messages from database
     final dbMessages = await LocalDatabaseService.instance.getSessionMessages(
       sessionId,
     );
 
-    // Map to Firebase AI Content history
     final history = dbMessages
         .where((m) => m.role != ChatMessageRole.system)
-        .map(_chatMessageToFirebaseContent)
+        .map(_chatMessageToRestContent)
         .toList();
 
-    final chatSession = model.startChat(history: history);
+    _activeHistories[sessionId] = history;
+    return history;
+  }
 
-    _activeSessions[sessionId] = chatSession;
-    return chatSession;
+  Future<http.Response> _callGeminiApi({
+    required String apiKey,
+    required Map<String, dynamic> payload,
+  }) async {
+    final candidateModels = [
+      'gemini-3.5-flash-lite',
+      'gemini-3.5-flash',
+      'gemini-3.8-flash',
+    ];
+
+    http.Response? lastResponse;
+
+    for (final model in candidateModels) {
+      final url = Uri.parse(
+        'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey',
+      );
+
+      try {
+        final response = await http.post(
+          url,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        ).timeout(const Duration(seconds: 25));
+
+        if (response.statusCode == 200) {
+          return response;
+        }
+
+        logger.w('Model $model returned status ${response.statusCode}: ${response.body}');
+        lastResponse = response;
+      } catch (e) {
+        logger.w('Error calling Gemini API on model $model: $e');
+      }
+    }
+
+    if (lastResponse != null) {
+      return lastResponse;
+    }
+    throw Exception('All Gemini model endpoints failed.');
   }
 
   /// Sends a message and processes the response.
-  /// Emits step events during the loop for tool calls.
+  /// Emits step events during the agentic loop for tool calls.
   Future<void> processMessage({
     required String sessionId,
     required ChatMessage userMessage,
@@ -112,76 +132,142 @@ class AiChatService {
     await db.updateSessionLastMsgAt(sessionId, DateTime.now());
 
     try {
-      final chatSession = await _getOrCreateChatSession(
-        sessionId,
-        mealScanContext: mealScanContext,
+      final history = await _getOrCreateHistory(sessionId);
+      history.add(_chatMessageToRestContent(userMessage));
+
+      // Build system instruction
+      final systemPrompt = AiContextBuilder.buildSystemPrompt(
         profile: profile,
+        mealScanContext: mealScanContext,
       );
 
-      var response = await chatSession.sendMessage(
-        _chatMessageToFirebaseContent(userMessage),
-      );
+      final apiKey = dotenv.env['GEMINI_API_KEY'] ??
+          const String.fromEnvironment('GEMINI_API_KEY');
 
-      // Handle function calls in the agentic loop
-      while (response.functionCalls.isNotEmpty) {
-        final functionResponses = <fbai.Part>[];
-
-        for (final call in response.functionCalls) {
-          final toolName = call.name;
-          final args = call.args;
-
-          // Emit start event
-          final humanLabel = AiToolDeclarations.humanLabel(toolName, args);
-          _stepEventsController.add(
-            AgentStepEvent(
-              sessionId: sessionId,
-              toolName: toolName,
-              label: humanLabel,
-              isRunning: true,
-              timestamp: DateTime.now(),
-            ),
-          );
-
-          Map<String, Object?> result;
-          bool success = true;
-          try {
-            // Execute tool on Spring Boot
-            result = await toolClient.execute(toolName, args);
-          } catch (e) {
-            success = false;
-            result = {'error': e.toString()};
-          }
-
-          // Emit completed event
-          _stepEventsController.add(
-            AgentStepEvent(
-              sessionId: sessionId,
-              toolName: toolName,
-              label: success ? humanLabel : 'Failed',
-              isRunning: false,
-              success: success,
-              timestamp: DateTime.now(),
-            ),
-          );
-
-          functionResponses.add(fbai.FunctionResponse(toolName, result));
-        }
-
-        // Send function responses back to the model
-        response = await chatSession.sendMessage(
-          fbai.Content('user', functionResponses),
-        );
+      if (apiKey.isEmpty) {
+        throw Exception('GEMINI_API_KEY is not configured in .env');
       }
 
-      final aiText = response.text ?? '';
-      if (aiText.isNotEmpty) {
-        transport.addChunk(aiText);
+      // Handle function calls in the agentic loop
+      int iterations = 0;
+      const maxIterations = 5;
 
-        // 2. Save model response to database
-        final aiMessageId = const Uuid().v4();
-        final aiMessage = ChatMessage.model(aiText);
-        await db.saveMessage(sessionId, aiMessageId, aiMessage);
-        await db.updateSessionLastMsgAt(sessionId, DateTime.now());
+      while (iterations < maxIterations) {
+        iterations++;
+
+        final payload = <String, dynamic>{
+          'system_instruction': {
+            'parts': [
+              {'text': systemPrompt}
+            ]
+          },
+          'contents': history,
+          'tools': AiToolDeclarations.restTools,
+        };
+
+        final response = await _callGeminiApi(
+          apiKey: apiKey,
+          payload: payload,
+        );
+
+        if (response.statusCode != 200) {
+          throw Exception(
+            'Gemini API request failed with status ${response.statusCode}: ${response.body}',
+          );
+        }
+
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final candidates = data['candidates'] as List?;
+        if (candidates == null || candidates.isEmpty) {
+          throw Exception('No candidates returned from Gemini API');
+        }
+
+        final candidate = candidates.first['content'] as Map<String, dynamic>;
+        // Preserve model response including thoughtSignature and functionCall in history
+        history.add(candidate);
+
+        final parts = (candidate['parts'] as List?) ?? [];
+        final funcResponseParts = <Map<String, dynamic>>[];
+
+        for (final part in parts) {
+          if (part is Map && part.containsKey('functionCall')) {
+            final call = Map<String, dynamic>.from(part['functionCall'] as Map);
+            final toolName = call['name'] as String;
+            final args = call['args'] != null
+                ? Map<String, dynamic>.from(call['args'] as Map)
+                : <String, dynamic>{};
+
+            // Emit start event
+            final humanLabel = AiToolDeclarations.humanLabel(toolName, args);
+            _stepEventsController.add(
+              AgentStepEvent(
+                sessionId: sessionId,
+                toolName: toolName,
+                label: humanLabel,
+                isRunning: true,
+                timestamp: DateTime.now(),
+              ),
+            );
+
+            Map<String, Object?> result;
+            bool success = true;
+            try {
+              // Execute tool on Spring Boot
+              result = await toolClient.execute(toolName, args);
+            } catch (e) {
+              success = false;
+              result = {'error': e.toString()};
+            }
+
+            // Emit completed event
+            _stepEventsController.add(
+              AgentStepEvent(
+                sessionId: sessionId,
+                toolName: toolName,
+                label: success ? humanLabel : 'Failed',
+                isRunning: false,
+                success: success,
+                timestamp: DateTime.now(),
+              ),
+            );
+
+            funcResponseParts.add({
+              'functionResponse': {
+                'name': toolName,
+                'response': result,
+              }
+            });
+          }
+        }
+
+        // If there were function calls, feed the responses back into the conversation
+        if (funcResponseParts.isNotEmpty) {
+          history.add({
+            'role': 'user',
+            'parts': funcResponseParts,
+          });
+          continue; // Loop again for the model to see results and summarize
+        }
+
+        // If no function calls, extract text response
+        final sb = StringBuffer();
+        for (final part in parts) {
+          if (part is Map && part['text'] != null) {
+            sb.write(part['text']);
+          }
+        }
+
+        final aiText = sb.toString().trim();
+        if (aiText.isNotEmpty) {
+          transport.addChunk(aiText);
+
+          // Save model response to database
+          final aiMessageId = const Uuid().v4();
+          final aiMessage = ChatMessage.model(aiText);
+          await db.saveMessage(sessionId, aiMessageId, aiMessage);
+          await db.updateSessionLastMsgAt(sessionId, DateTime.now());
+        }
+        break; // Successfully completed turn
       }
     } catch (e, stack) {
       logger.e('Error processing message in session $sessionId: $e', e, stack);
@@ -192,6 +278,6 @@ class AiChatService {
   }
 
   void clearSessionCache(String sessionId) {
-    _activeSessions.remove(sessionId);
+    _activeHistories.remove(sessionId);
   }
 }

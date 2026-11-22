@@ -34,7 +34,7 @@ class ApiClient {
   // Get the current user's UID
   String getCurrentUid() {
     final user = FirebaseAuth.instance.currentUser;
-    return user!.uid;
+    return user?.uid ?? 'guest_user';
   }
 
   // Get standardized headers for API requests

@@ -32,7 +32,16 @@ public class GetUserProfileTool {
             userService.findOrCreateUser(userId, "dev@example.com", "Dev User");
         }
 
-        User user = userService.getUserByUserId(userId);
+        User user;
+        try {
+            user = userService.getUserByUserId(userId);
+        } catch (Exception e) {
+            Map<String, Object> fallback = new LinkedHashMap<>();
+            fallback.put("message", "User profile has not been configured yet.");
+            fallback.put("dietary_preference", "GENERAL");
+            fallback.put("goal", "MAINTAIN_WEIGHT");
+            return fallback;
+        }
         List<HealthConditionDto> conditions = healthConditionService.getUserConditions(userId);
 
         Double bmi = null;
