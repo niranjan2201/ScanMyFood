@@ -445,7 +445,7 @@ public class VertexAiServiceImpl implements AiService {
               "- Add steam if it's a hot dish for realism",
           foodDescription);
 
-      logger.info("Generating food image with Gemini 2.5 Flash Image for: {}", foodDescription);
+      logger.info("Generating food image with Gemini 2.0 Flash for: {}", foodDescription);
       logger.debug("Image generation prompt: {}", prompt);
 
       // Create content with image generation request
@@ -500,7 +500,7 @@ public class VertexAiServiceImpl implements AiService {
       return imageBytes;
 
     } catch (Exception e) {
-      logger.error("Error generating food image with Gemini 2.5 Flash Image", e);
+      logger.error("Error generating food image with Gemini 2.0 Flash", e);
       throw new RuntimeException("Failed to generate food image: " + e.getMessage(), e);
     }
   }

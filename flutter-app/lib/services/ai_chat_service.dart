@@ -67,7 +67,7 @@ class AiChatService {
     );
 
     final model = fbai.FirebaseAI.vertexAI().generativeModel(
-      model: 'gemini-2.5-flash',
+      model: 'gemini-2.0-flash',
       systemInstruction: fbai.Content.system(systemPrompt),
       tools: [fbai.Tool.functionDeclarations(AiToolDeclarations.all)],
     );
