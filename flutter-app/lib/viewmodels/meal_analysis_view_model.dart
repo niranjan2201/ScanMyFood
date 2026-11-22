@@ -75,7 +75,12 @@ class MealAnalysisViewModel extends BaseViewModel {
     required ImageSource source,
   }) async {
     final imagePicker = ImagePicker();
-    final image = await imagePicker.pickImage(source: source);
+    final image = await imagePicker.pickImage(
+      source: source,
+      imageQuality: 85,
+      maxWidth: 1920,
+      maxHeight: 1920,
+    );
 
     if (image != null) {
       final persisted = await _persistImage(File(image.path));
@@ -86,7 +91,12 @@ class MealAnalysisViewModel extends BaseViewModel {
 
   Future<void> handleFoodImageCapture(ImageSource source) async {
     final imagePicker = ImagePicker();
-    final image = await imagePicker.pickImage(source: source);
+    final image = await imagePicker.pickImage(
+      source: source,
+      imageQuality: 85,
+      maxWidth: 1920,
+      maxHeight: 1920,
+    );
 
     if (image != null) {
       final persisted = await _persistImage(File(image.path));

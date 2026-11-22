@@ -76,7 +76,12 @@ class ProductAnalysisViewModel extends BaseViewModel {
     required bool isFrontImage,
   }) async {
     final imagePicker = ImagePicker();
-    final image = await imagePicker.pickImage(source: source);
+    final image = await imagePicker.pickImage(
+      source: source,
+      imageQuality: 85,
+      maxWidth: 1920,
+      maxHeight: 1920,
+    );
 
     if (image != null) {
       final persisted = await _persistImage(File(image.path));
