@@ -37,10 +37,14 @@ public class UserIntakeController {
         try {
             SaveIntakeOutput saveIntakeOutput = new SaveIntakeOutput();
             String accessUrl = "";
-            if (foodImage != null) {
+            if (foodImage != null && !foodImage.isEmpty()) {
                 log.info("Food Image: {}", foodImage.getOriginalFilename());
-                String storedPath = fileStorageService.store(foodImage, "food-images");
-                accessUrl = fileStorageService.getAccessUrl(storedPath);
+                try {
+                    String storedPath = fileStorageService.store(foodImage, "food-images");
+                    accessUrl = fileStorageService.getAccessUrl(storedPath);
+                } catch (Exception se) {
+                    log.warn("Could not store food image ({}), proceeding to save intake: {}", se.getMessage(), se.getMessage());
+                }
             }
 
             int dailyIntakeRecordId = userIntakeService.saveScannedFoodIntake(saveScannedFoodInput, accessUrl);
@@ -66,8 +70,15 @@ public class UserIntakeController {
 
         try {
             SaveIntakeOutput saveIntakeOutput = new SaveIntakeOutput();
-            String storedPath = fileStorageService.store(productImage, "food-images");
-            String accessUrl = fileStorageService.getAccessUrl(storedPath);
+            String accessUrl = "";
+            if (productImage != null && !productImage.isEmpty()) {
+                try {
+                    String storedPath = fileStorageService.store(productImage, "food-images");
+                    accessUrl = fileStorageService.getAccessUrl(storedPath);
+                } catch (Exception se) {
+                    log.warn("Could not store product image ({}), proceeding to save intake: {}", se.getMessage(), se.getMessage());
+                }
+            }
 
             int dailyIntakeRecordId = userIntakeService.saveScannedLabelIntake(saveScannedLabelInput, accessUrl);
             saveIntakeOutput.setDailyIntakeId(dailyIntakeRecordId);
