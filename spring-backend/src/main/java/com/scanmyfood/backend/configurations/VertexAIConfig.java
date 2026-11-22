@@ -1,72 +1,52 @@
 package com.scanmyfood.backend.configurations;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.auth.oauth2.GoogleCredentials;
-import com.google.cloud.vertexai.VertexAI;
-import com.google.cloud.vertexai.generativeai.GenerativeModel;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.io.ClassPathResource;
-import org.springframework.core.io.Resource;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
+import java.net.http.HttpClient;
 
-@Slf4j
 @Configuration
 public class VertexAIConfig {
 
-    @Value("${google.cloud.project-id:foodscanai-d28bc}")
-    private String projectId;
+    @Value("${gemini.api.key:}")
+    private String geminiApiKey;
 
-    @Value("${google.cloud.location:us-central1}")
-    private String location;
+    @Value("${gemini.model.name:gemini-flash-latest}")
+    private String geminiModelName;
 
-    @Value("${vertex.ai.model.name:gemini-2.0-flash}")
-    private String MODEL_NAME;
-
-    @Value("${vertex.ai.image.model.name:gemini-2.0-flash}")
-    private String IMAGE_MODEL_NAME;
+    @Value("${gemini.image.model.name:gemini-flash-latest}")
+    private String geminiImageModelName;
 
     @Bean
-    public GoogleCredentials googleCredentials() throws IOException {
-        // Option 1: Use the service account JSON file that's already present for Firebase
-        Resource resource = new ClassPathResource("firebase-service-account.json");
-        if (resource.exists()) {
-            return GoogleCredentials.fromStream(resource.getInputStream())
-                    .createScoped("https://www.googleapis.com/auth/cloud-platform");
+    public HttpClient geminiHttpClient() {
+        return HttpClient.newHttpClient();
+    }
+
+    @Bean
+    public GeminiConfig geminiConfig() {
+        return new GeminiConfig(geminiApiKey, geminiModelName, geminiImageModelName);
+    }
+
+    public static class GeminiConfig {
+        private final String apiKey;
+        private final String modelName;
+        private final String imageModelName;
+
+        public GeminiConfig(String apiKey, String modelName, String imageModelName) {
+            this.apiKey = apiKey;
+            this.modelName = modelName;
+            this.imageModelName = imageModelName;
         }
 
-        // Option 2: Try environment variable
-        String credentialsJson = System.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON");
-        if (credentialsJson != null && !credentialsJson.isEmpty()) {
-            return GoogleCredentials.fromStream(new ByteArrayInputStream(credentialsJson.getBytes()))
-                    .createScoped("https://www.googleapis.com/auth/cloud-platform");
+        public String getApiKey() { return apiKey; }
+        public String getModelName() { return modelName; }
+        public String getImageModelName() { return imageModelName; }
+
+        public String getGenerateContentUrl(boolean useImageModel) {
+            String model = useImageModel ? imageModelName : modelName;
+            return "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
         }
-
-        // Option 3: Fall back to Application Default Credentials
-        return GoogleCredentials.getApplicationDefault()
-                .createScoped("https://www.googleapis.com/auth/cloud-platform");
-    }
-
-    @Bean
-    public VertexAI vertexAI(GoogleCredentials credentials) {
-        return new VertexAI.Builder()
-                .setProjectId(projectId)
-                .setLocation(location)
-                .setCredentials(credentials)
-                .build();
-    }
-
-    @Bean
-    public GenerativeModel generativeModel(VertexAI vertexAI) {
-        return new GenerativeModel(MODEL_NAME, vertexAI);
-    }
-
-    @Bean
-    public GenerativeModel imageGenerativeModel(VertexAI vertexAI) {
-        return new GenerativeModel(IMAGE_MODEL_NAME, vertexAI);
     }
 }

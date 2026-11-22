@@ -1,15 +1,22 @@
 package com.scanmyfood.backend.services;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
-import com.scanmyfood.backend.models.FoodAnalysisResponse;
-import com.scanmyfood.backend.models.ProductAnalysisResponse;
-
+import com.fasterxml.jackson.databind.JsonNode;
+import com.scanmyfood.backend.configurations.VertexAIConfig;
 import com.scanmyfood.backend.constants.NutrientConstants;
-import com.scanmyfood.backend.models.User;
+import com.scanmyfood.backend.dto.HealthConditionDto;
+import com.scanmyfood.backend.mapper.UserIntakeMapper;
+import com.scanmyfood.backend.models.*;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,25 +24,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.scanmyfood.backend.models.MealDictionaryRecord;
-import com.scanmyfood.backend.models.RecipeItem;
-import com.google.cloud.vertexai.api.Content;
-import com.google.cloud.vertexai.api.GenerateContentResponse;
-import com.google.cloud.vertexai.generativeai.ContentMaker;
-import com.google.cloud.vertexai.generativeai.GenerativeModel;
-import com.google.cloud.vertexai.generativeai.PartMaker;
-import com.google.protobuf.ByteString;
-
-import java.util.stream.Collectors;
-import com.scanmyfood.backend.dto.HealthConditionDto;
-import com.scanmyfood.backend.models.FoodItem;
-import com.scanmyfood.backend.models.FoodItemRecord;
-import com.scanmyfood.backend.models.FoodNutrient;
-import com.scanmyfood.backend.models.Quantity;
-import com.scanmyfood.backend.models.CountryCode;
-import com.scanmyfood.backend.models.PlateNutrients;
-import com.scanmyfood.backend.mapper.UserIntakeMapper;
 
 @Service
 public class VertexAiServiceImpl implements AiService {
@@ -46,10 +34,10 @@ public class VertexAiServiceImpl implements AiService {
   private ObjectMapper objectMapper;
 
   @Autowired
-  private GenerativeModel generativeModel;
+  private HttpClient geminiHttpClient;
 
   @Autowired
-  private GenerativeModel imageGenerativeModel;
+  private VertexAIConfig.GeminiConfig geminiConfig;
 
   @Autowired
   private UserService userService;
@@ -60,14 +48,118 @@ public class VertexAiServiceImpl implements AiService {
   @Autowired
   private UserIntakeMapper userIntakeMapper;
 
+  // -------------------------------------------------------------------------
+  // Core REST helper: call Gemini Developer API
+  // -------------------------------------------------------------------------
+
+  /**
+   * Call Gemini REST API with text-only prompt. Returns the text response.
+   */
+  private String callGeminiText(String prompt, boolean useImageModel) throws IOException, InterruptedException {
+    String url = geminiConfig.getGenerateContentUrl(useImageModel);
+    Map<String, Object> part = Map.of("text", prompt);
+    Map<String, Object> content = Map.of("parts", List.of(part));
+    Map<String, Object> body = Map.of("contents", List.of(content));
+    String bodyJson = objectMapper.writeValueAsString(body);
+
+    HttpRequest request = HttpRequest.newBuilder()
+        .uri(URI.create(url))
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
+        .build();
+
+    HttpResponse<String> response = geminiHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    if (response.statusCode() != 200) {
+      throw new IOException("Gemini API error " + response.statusCode() + ": " + response.body());
+    }
+    return extractTextFromGeminiResponse(response.body());
+  }
+
+  /**
+   * Call Gemini REST API with text + one or more image parts. Returns text response.
+   */
+  private String callGeminiMultimodal(String prompt, List<MultipartFile> images, boolean useImageModel)
+      throws IOException, InterruptedException {
+    String url = geminiConfig.getGenerateContentUrl(useImageModel);
+
+    List<Map<String, Object>> parts = new ArrayList<>();
+    parts.add(Map.of("text", prompt));
+    for (MultipartFile image : images) {
+      String mimeType = determineMimeType(image);
+      String base64Data = Base64.getEncoder().encodeToString(image.getBytes());
+      parts.add(Map.of("inline_data", Map.of("mime_type", mimeType, "data", base64Data)));
+    }
+    Map<String, Object> content = Map.of("parts", parts);
+    Map<String, Object> body = Map.of("contents", List.of(content));
+    String bodyJson = objectMapper.writeValueAsString(body);
+
+    HttpRequest request = HttpRequest.newBuilder()
+        .uri(URI.create(url))
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
+        .build();
+
+    HttpResponse<String> response = geminiHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    if (response.statusCode() != 200) {
+      throw new IOException("Gemini API error " + response.statusCode() + ": " + response.body());
+    }
+    return extractTextFromGeminiResponse(response.body());
+  }
+
+  /**
+   * Extract text from Gemini REST API JSON response.
+   */
+  private String extractTextFromGeminiResponse(String responseBody) throws IOException {
+    JsonNode root = objectMapper.readTree(responseBody);
+    JsonNode candidates = root.path("candidates");
+    if (candidates.isMissingNode() || candidates.isEmpty()) {
+      throw new IOException("No candidates in Gemini response: " + responseBody);
+    }
+    JsonNode parts = candidates.get(0).path("content").path("parts");
+    if (parts.isMissingNode() || parts.isEmpty()) {
+      throw new IOException("No parts in Gemini response: " + responseBody);
+    }
+    // Look for text part
+    for (JsonNode part : parts) {
+      if (part.has("text")) {
+        return part.get("text").asText();
+      }
+    }
+    throw new IOException("No text part in Gemini response: " + responseBody);
+  }
+
+  /**
+   * Extract image bytes from Gemini REST response (inlineData).
+   */
+  private byte[] extractImageFromGeminiResponse(String responseBody) throws IOException {
+    JsonNode root = objectMapper.readTree(responseBody);
+    JsonNode candidates = root.path("candidates");
+    if (candidates.isMissingNode() || candidates.isEmpty()) {
+      throw new IOException("No candidates in Gemini image response");
+    }
+    JsonNode parts = candidates.get(0).path("content").path("parts");
+    for (JsonNode part : parts) {
+      if (part.has("inlineData")) {
+        String b64 = part.path("inlineData").path("data").asText();
+        return Base64.getDecoder().decode(b64);
+      }
+      if (part.has("inline_data")) {
+        String b64 = part.path("inline_data").path("data").asText();
+        return Base64.getDecoder().decode(b64);
+      }
+    }
+    throw new IOException("No image data in Gemini response");
+  }
+
+  // -------------------------------------------------------------------------
+  // AiService implementations
+  // -------------------------------------------------------------------------
+
   @Override
   public ProductAnalysisResponse analyzeProductImages(MultipartFile frontImage, MultipartFile labelImage,
       String userId) {
 
     try {
-      String frontMimeType = determineMimeType(frontImage);
-      String labelMimeType = determineMimeType(labelImage);
-
       User user = null;
       List<HealthConditionDto> conditions = null;
       Double bmi = null;
@@ -84,16 +176,10 @@ public class VertexAiServiceImpl implements AiService {
             if (heightMeters > 0) {
               bmi = user.getWeightKg() / (heightMeters * heightMeters);
               bmi = Math.round(bmi * 10.0) / 10.0;
-
-              if (bmi < 18.5) {
-                bmiCategory = "Underweight";
-              } else if (bmi < 25) {
-                bmiCategory = "Normal weight";
-              } else if (bmi < 30) {
-                bmiCategory = "Overweight";
-              } else {
-                bmiCategory = "Obese";
-              }
+              if (bmi < 18.5) bmiCategory = "Underweight";
+              else if (bmi < 25) bmiCategory = "Normal weight";
+              else if (bmi < 30) bmiCategory = "Overweight";
+              else bmiCategory = "Obese";
             }
           }
         }
@@ -106,27 +192,21 @@ public class VertexAiServiceImpl implements AiService {
       if (user != null) {
         contextBuilder.append(String.format("- Dietary Preference: %s\n",
             user.getDietaryPreference() != null ? user.getDietaryPreference().name() : "None"));
-        contextBuilder
-            .append(String.format("- Health Goal: %s\n", user.getGoal() != null ? user.getGoal().name() : "None"));
+        contextBuilder.append(String.format("- Health Goal: %s\n", user.getGoal() != null ? user.getGoal().name() : "None"));
         contextBuilder.append(String.format("- BMI: %s (%s)\n", bmi != null ? bmi : "Unknown", bmiCategory));
-        contextBuilder
-            .append(String.format("- Region/Country: %s\n", user.getCountry() != null ? user.getCountry() : "Global"));
-
+        contextBuilder.append(String.format("- Region/Country: %s\n", user.getCountry() != null ? user.getCountry() : "Global"));
         if (conditions != null && !conditions.isEmpty()) {
           contextBuilder.append("- Pre-existing Health Conditions:\n");
           for (HealthConditionDto cond : conditions) {
             contextBuilder.append(String.format("  * %s: %s\n", cond.getName(), cond.getDescription()));
             if (cond.getNutrientsToLimit() != null && !cond.getNutrientsToLimit().isEmpty()) {
-              contextBuilder.append(
-                  String.format("    - Nutrients to Limit: %s\n", String.join(", ", cond.getNutrientsToLimit())));
+              contextBuilder.append(String.format("    - Nutrients to Limit: %s\n", String.join(", ", cond.getNutrientsToLimit())));
             }
             if (cond.getNutrientsToIncrease() != null && !cond.getNutrientsToIncrease().isEmpty()) {
-              contextBuilder.append(
-                  String.format("    - Nutrients to Increase: %s\n", String.join(", ", cond.getNutrientsToIncrease())));
+              contextBuilder.append(String.format("    - Nutrients to Increase: %s\n", String.join(", ", cond.getNutrientsToIncrease())));
             }
             if (cond.getIngredientsToLimit() != null && !cond.getIngredientsToLimit().isEmpty()) {
-              contextBuilder.append(
-                  String.format("    - Ingredients to Limit: %s\n", String.join(", ", cond.getIngredientsToLimit())));
+              contextBuilder.append(String.format("    - Ingredients to Limit: %s\n", String.join(", ", cond.getIngredientsToLimit())));
             }
           }
         } else {
@@ -137,8 +217,6 @@ public class VertexAiServiceImpl implements AiService {
       }
 
       String userContext = contextBuilder.toString();
-
-      // Create prompt
       String prompt = """
           %s
 
@@ -180,51 +258,21 @@ public class VertexAiServiceImpl implements AiService {
           Strictly follow these rules:
           1. MUST include ALL nutrients from this list: %s
           2. If a nutrient is not found on the label, set its value to 0.0 and use standard unit
-          3. Extract total nutrient (e.g., Total Sugars, Total Fat) and its sub-nutrients (e.g., Added Sugars, Saturated Fat, Trans Fat) if mentioned in the label
-          4. Calculate DV%% using these reference values:
-             %s
+          3. Extract total nutrient (e.g., Total Sugars, Total Fat) and its sub-nutrients if mentioned
+          4. Calculate DV%% using these reference values: %s
              Formula: (nutrient_quantity_per_serving / daily_value_reference) × 100
-          5. Return calculated DV%% in double, and not the ones found in label
+          5. Return calculated DV%% in double, not the ones found in label
           6. Do not include any extra characters or formatting outside of the JSON object
           7. Use accurate escape sequences for any special characters
           8. For primary_concerns, focus on major nutritional imbalances
-          9. For recommendations:
-             - Suggest foods that can be added to complement the product
-             - Focus on practical additions
-             - Explain how each addition helps balance nutrition
-          10. Use %%DV guidelines:
-             5%% DV or less is considered low dv_status
-             20%% DV or more is considered high dv_status
-             5%% < DV < 20%% is considered moderate dv_status
-          11. For health_impact determination:
-             "At least" nutrients (like fiber, protein):
-               High dv_status → Good health_impact
-               Moderate dv_status → Moderate health_impact
-               Low dv_status → Bad health_impact
-             "Less than" nutrients (like sodium, saturated fat, trans fat, sugar, cholesterol):
-               Low dv_status → Good health_impact
-               Moderate dv_status → Moderate health_impact
-               High dv_status → Bad health_impact
-          12. PERSONALIZATION & LOCALIZATION RULES:
-             - You MUST tailor the warnings inside "primary_concerns" and their "explanation" to the user's specific health conditions, health goal, and BMI category shown in the USER HEALTH PROFILE & CONTEXT above.
-             - If the user has conditions (e.g. Hypertension, Diabetes), strongly focus on and prioritize highlighting concerns and warnings for ingredients or nutrients they need to limit (e.g. Sodium, Sugar).
-             - In the "recommendations" list:
-               * Suggest complementary food items that align perfectly with the user's Dietary Preference (e.g., VEG, NON_VEG, VEGAN).
-               * Suggest additions that are highly relevant, popular, and readily available in the user's country or region (e.g., if region is India, suggest local items like paneer, curd, or dal rather than obscure western ingredients).
-               * Align suggestions with the user's Health Goal (e.g. suggest nutrient-dense, lower-calorie high-fiber foods for WEIGHT_LOSS; high-protein, calorie-rich additions for MUSCLE_GAIN).
+          9. For recommendations suggest complementary foods
+          10. Use %%DV guidelines: 5%% DV or less is Low, 20%% DV or more is High, between is Moderate
+          11. For health_impact: 'At least' nutrients - High=Good, Moderate=Moderate, Low=Bad; 'Less than' nutrients - Low=Good, Moderate=Moderate, High=Bad
+          12. PERSONALIZATION: Tailor primary_concerns to user's health conditions, goal, and BMI. Suggest regionally appropriate foods.
           """
           .formatted(userContext, NutrientConstants.ALL_NUTRIENT_NAMES, NutrientConstants.DAILY_VALUES_REFERENCE);
 
-      // Use ContentMaker and PartMaker
-      Content content = ContentMaker.fromMultiModalData(
-          prompt,
-          PartMaker.fromMimeTypeAndData(frontMimeType, frontImage.getBytes()),
-          PartMaker.fromMimeTypeAndData(labelMimeType, labelImage.getBytes()));
-      // Generate content
-      GenerateContentResponse response = generativeModel.generateContent(content);
-
-      // Extract JSON and deserialize directly into ProductAnalysisResponse
-      String responseText = response.getCandidates(0).getContent().getParts(0).getText();
+      String responseText = callGeminiMultimodal(prompt, List.of(frontImage, labelImage), false);
       String jsonString = extractJsonString(responseText);
       return objectMapper.readValue(jsonString, ProductAnalysisResponse.class);
 
@@ -237,8 +285,6 @@ public class VertexAiServiceImpl implements AiService {
   @Override
   public FoodAnalysisResponse analyzeFoodImage(MultipartFile imageFile, String description, String userId) {
     try {
-      String foodMimeType = determineMimeType(imageFile);
-
       User user = null;
       try {
         if (userId != null && !userId.trim().isEmpty()) {
@@ -250,13 +296,12 @@ public class VertexAiServiceImpl implements AiService {
 
       String country = (user != null && user.getCountry() != null) ? user.getCountry() : "Global";
 
-      // Create prompt
       StringBuilder promptBuilder = new StringBuilder();
       promptBuilder.append(String.format("USER REGION/COUNTRY: %s\n\n", country));
       promptBuilder.append("Analyze this food image and break down each visible food item.\n");
       if (description != null && !description.trim().isEmpty()) {
         promptBuilder.append(String.format(
-            "User's description/context: \"%s\". Use this description to guide your identification and portion estimation of the visible food items.\n",
+            "User's description/context: \"%s\". Use this to guide identification and portion estimation.\n",
             description));
       }
       promptBuilder.append(String.format(
@@ -267,11 +312,8 @@ public class VertexAiServiceImpl implements AiService {
                 "analyzed_food_items": [
                   {
                     "name": "Regional Name of the food item",
-                    "canonical_name": "Unique lowercase snake_case English name for the item, e.g., 'roti', 'idli', 'basmati_rice', 'coconut_chutney', 'okra'",
-                    "quantity": {
-                      "value": 0,
-                      "unit": "g"
-                    },
+                    "canonical_name": "Unique lowercase snake_case English name, e.g., 'roti', 'idli', 'basmati_rice'",
+                    "quantity": {"value": 0, "unit": "g"},
                     "nutrients": [
                       {"name": "calories", "quantity": {"value": 0, "unit": "kcal"}},
                       {"name": "protein", "quantity": {"value": 0, "unit": "g"}},
@@ -294,31 +336,16 @@ public class VertexAiServiceImpl implements AiService {
                 ]
               }
 
-              Consider:
-              1. Use visual cues to estimate portions (size relative to plate, height of food, etc.)
-              2. Take a deeper look into the container size of food, don't consider a zoomed in container to be a big container
-              3. Provide nutrients for the estimated total quantity of each food item
-              4. Prioritize using values from the USDA FoodData Central database
-              5. Consider common serving sizes and preparation methods
-              6. Account for density and volume-to-weight conversions
-              7. Use Atwater factors (Protein=4 kcal/g, Carb=4, Fat=9) for grams to kcal conversion
-              8. LOCALIZATION RULES:
-                 - You MUST return the "meal_name" and the "name" of each food item in "analyzed_food_items" using the most common, localized names used in the user's region/country (%s).
-                 - For example, if the user's country is India, prioritize returning terms like "Poori", "Chole Masala", "Roti", "Idli", "Dosa", "Samosa", etc., rather than generic or descriptive terms like "Indian flatbread" or "chickpea curry".
+              Rules:
+              1. Use visual cues to estimate portions
+              2. Provide nutrients for the estimated total quantity of each food item
+              3. Use USDA FoodData Central values where possible
+              4. LOCALIZATION: Return meal_name and food item names in the most common localized names for user's region (%s).
               """,
           country));
       String prompt = promptBuilder.toString();
 
-      // Use ContentMaker and PartMaker with the determined MIME type
-      Content content = ContentMaker.fromMultiModalData(
-          prompt,
-          PartMaker.fromMimeTypeAndData(foodMimeType, imageFile.getBytes()));
-
-      // Generate content
-      GenerateContentResponse response = generativeModel.generateContent(content);
-
-      // Extract JSON and deserialize directly into FoodAnalysisResponse
-      String responseText = response.getCandidates(0).getContent().getParts(0).getText();
+      String responseText = callGeminiMultimodal(prompt, List.of(imageFile), false);
       String jsonString = extractJsonString(responseText);
       FoodAnalysisResponse responseObj = objectMapper.readValue(jsonString, FoodAnalysisResponse.class);
       enrichFoodAnalysisResponse(responseObj, userId, "SM");
@@ -344,26 +371,21 @@ public class VertexAiServiceImpl implements AiService {
 
       String country = (user != null && user.getCountry() != null) ? user.getCountry() : "Global";
 
-      // Create prompt
       String prompt = """
           USER REGION/COUNTRY: %s
 
-          You are a highly qualified and experienced nutritionist specializing in providing accurate nutritional information.
-          Analyze these food items (always consider items in cooked form whenever applicable) and their quantities:
+          You are a highly qualified nutritionist. Analyze these food items (consider cooked form where applicable) and their quantities:
 
           %s
 
-          Generate nutritional info for each of the mentioned food items and their respective quantities and respond using this JSON schema:
+          Generate nutritional info for each food item and respond in this JSON schema:
           {
             "meal_name": "Name of the food item/meal",
             "analyzed_food_items": [
               {
                 "name": "Regional Name of the food item",
-                "canonical_name": "Unique lowercase snake_case English name for the item, e.g., 'roti', 'idli', 'basmati_rice', 'coconut_chutney', 'okra'",
-                "quantity": {
-                  "value": 0,
-                  "unit": "g"
-                },
+                "canonical_name": "Unique lowercase snake_case English name, e.g., 'roti', 'idli', 'basmati_rice'",
+                "quantity": {"value": 0, "unit": "g"},
                 "nutrients": [
                   {"name": "calories", "quantity": {"value": 0, "unit": "kcal"}},
                   {"name": "protein", "quantity": {"value": 0, "unit": "g"}},
@@ -386,32 +408,15 @@ public class VertexAiServiceImpl implements AiService {
             ]
           }
 
-
-              Important considerations:
-              1. Analyze the provided food items and their quantities in the meal description.
-              2. Generate nutritional information for each food item and the total meal, adhering to the provided JSON schema.
-              3. Prioritize using values from the USDA FoodData Central database. If data is unavailable in the USDA database, use other reputable sources like the EFSA (European Food Safety Authority) Comprehensive Food Consumption Database or national food composition databases, ensuring data reliability and scientific validity.
-              4. Account for common preparation methods (e.g., boiled, fried, baked) when calculating nutritional values. If the preparation method is not specified, assume the most common method for that food item.
-              5. Convert all measurements to grams (g) or milliliters (ml) as appropriate. If only volume is provided, use standard density values to convert to weight.  If a unit is not specified, assume grams (g).
-              6. Consider regional variations in portion sizes when interpreting quantities. If the description is ambiguous, use standard serving sizes.
-              7. Round all nutritional values to one decimal place.
-              8. Account for density and volume-to-weight conversions
-              9. LOCALIZATION RULES:
-                 - You MUST return the "meal_name" and the "name" of each food item in "analyzed_food_items" using the most common, localized names used in the user's region/country (%s).
-                 - For example, if the user's country is India, prioritize returning terms like "Poori", "Chole Masala", "Roti", "Idli", "Dosa", "Samosa", etc., rather than generic descriptions like "Indian flatbread" or "chickpea curry".
-
-              Provide accurate nutritional data based on the most reliable food databases and scientific sources.
-              """
+          Rules:
+          1. Use USDA FoodData Central values, or EFSA if unavailable.
+          2. Convert all measurements to g or ml. If unit not specified, assume grams.
+          3. Round all nutritional values to one decimal place.
+          4. LOCALIZATION: Return meal_name and food item names using the most common localized names for user's region (%s).
+          """
           .formatted(country, description, country);
 
-      // Use ContentMaker (text-only in this case)
-      Content content = ContentMaker.fromString(prompt);
-
-      // Generate content
-      GenerateContentResponse response = generativeModel.generateContent(content);
-
-      // Extract JSON and deserialize directly into FoodAnalysisResponse
-      String responseText = response.getCandidates(0).getContent().getParts(0).getText();
+      String responseText = callGeminiText(prompt, false);
       String jsonString = extractJsonString(responseText);
       FoodAnalysisResponse responseObj = objectMapper.readValue(jsonString, FoodAnalysisResponse.class);
       enrichFoodAnalysisResponse(responseObj, userId, "SD");
@@ -426,15 +431,12 @@ public class VertexAiServiceImpl implements AiService {
   @Override
   public byte[] generateFoodImage(String foodDescription) {
     try {
-      // Build optimized prompt for realistic food photography
       String prompt = String.format(
           "Generate a professional food photography image of %s. " +
               "Requirements: " +
-              "- Position the primary food item and its plating in the top 50%% of the frame, leaving the lower 50%% as a clean, minimalist table surface to allow for UI overlays "
-              +
+              "- Position the primary food item in the top 50%% of the frame, leaving the lower 50%% as a clean table surface for UI overlays " +
               "- Serve on appropriate cutlery and dinnerware based on the food type " +
-              "- Proper plating with accurate portion sizes matching the description " +
-              "- Arrange appetizingly on a clean table setting (white or wooden) " +
+              "- Proper plating with accurate portion sizes " +
               "- Natural soft daylight lighting from the side " +
               "- Shot from a 45-degree angle in landscape format (16:9 aspect ratio) " +
               "- Shallow depth of field, Canon EOS R5 photography style " +
@@ -445,82 +447,51 @@ public class VertexAiServiceImpl implements AiService {
               "- Add steam if it's a hot dish for realism",
           foodDescription);
 
-      logger.info("Generating food image with Gemini 2.0 Flash for: {}", foodDescription);
-      logger.debug("Image generation prompt: {}", prompt);
+      logger.info("Generating food image with Gemini for: {}", foodDescription);
 
-      // Create content with image generation request
-      Content content = ContentMaker.fromString(prompt);
+      String url = geminiConfig.getGenerateContentUrl(true);
+      List<Map<String, Object>> parts = List.of(Map.of("text", prompt));
+      Map<String, Object> content = Map.of("parts", parts);
+      Map<String, Object> generationConfig = Map.of("responseModalities", List.of("IMAGE", "TEXT"));
+      Map<String, Object> body = Map.of("contents", List.of(content), "generationConfig", generationConfig);
+      String bodyJson = objectMapper.writeValueAsString(body);
 
-      // Generate image using injected image generation model
-      GenerateContentResponse response = imageGenerativeModel.generateContent(content);
+      HttpRequest request = HttpRequest.newBuilder()
+          .uri(URI.create(url))
+          .header("Content-Type", "application/json")
+          .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
+          .build();
 
-      logger.info("Received response from Gemini, candidates: {}", response.getCandidatesCount());
-
-      if (response.getCandidatesCount() == 0) {
-        logger.error("No candidates in response. Response: {}", response);
-        throw new RuntimeException("No image generated - response has no candidates");
+      HttpResponse<String> response = geminiHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+      if (response.statusCode() != 200) {
+        throw new IOException("Gemini API error " + response.statusCode() + ": " + response.body());
       }
 
-      var candidate = response.getCandidates(0);
-      logger.info("Candidate parts count: {}", candidate.getContent().getPartsCount());
-
-      if (candidate.getContent().getPartsCount() == 0) {
-        logger.error("No parts in candidate content. Candidate: {}", candidate);
-        throw new RuntimeException("No image generated - candidate has no parts");
-      }
-
-      // Iterate through all parts to find the one with inline data (the image)
-      ByteString imageData = null;
-      for (int i = 0; i < candidate.getContent().getPartsCount(); i++) {
-        var part = candidate.getContent().getParts(i);
-
-        if (part.hasInlineData()) {
-          logger.info("Found inline data in part {}", i);
-          imageData = part.getInlineData().getData();
-          break;
-        } else if (part.hasText()) {
-          logger.info("Part {} contains text: {}", i, part.getText());
-        }
-      }
-
-      if (imageData == null) {
-        logger.error("No inline data found in any part");
-        throw new RuntimeException("No image generated - no part contains inline data");
-      }
-
-      // Extract image bytes from response
-      byte[] imageBytes = imageData.toByteArray();
-
+      byte[] imageBytes = extractImageFromGeminiResponse(response.body());
       logger.info("Successfully generated food image, size: {} bytes", imageBytes.length);
-
       if (imageBytes.length == 0) {
         throw new RuntimeException("Image data is empty");
       }
-
       return imageBytes;
 
     } catch (Exception e) {
-      logger.error("Error generating food image with Gemini 2.0 Flash", e);
+      logger.error("Error generating food image", e);
       throw new RuntimeException("Failed to generate food image: " + e.getMessage(), e);
     }
   }
 
-  /**
-   * Determines appropriate MIME type for an image file
-   */
+  // -------------------------------------------------------------------------
+  // Utility methods
+  // -------------------------------------------------------------------------
+
   private String determineMimeType(MultipartFile file) {
     String mimeType = file.getContentType();
     if (mimeType == null || mimeType.equals("application/octet-stream")) {
       String filename = file.getOriginalFilename();
       if (filename != null) {
-        if (filename.toLowerCase().endsWith(".png")) {
-          return "image/png";
-        } else if (filename.toLowerCase().endsWith(".jpg") ||
-            filename.toLowerCase().endsWith(".jpeg")) {
-          return "image/jpeg";
-        }
+        if (filename.toLowerCase().endsWith(".png")) return "image/png";
+        if (filename.toLowerCase().endsWith(".jpg") || filename.toLowerCase().endsWith(".jpeg")) return "image/jpeg";
       }
-      // Default to JPEG if can't determine
       return "image/jpeg";
     }
     return mimeType;
@@ -537,15 +508,12 @@ public class VertexAiServiceImpl implements AiService {
   }
 
   private void enrichFoodAnalysisResponse(FoodAnalysisResponse response, String userId, String sourceOfIntake) {
-    if (userId == null || userId.trim().isEmpty() || response == null) {
-      return;
-    }
+    if (userId == null || userId.trim().isEmpty() || response == null) return;
     try {
       User user = userService.getUserByUserId(userId);
       String countryCode = CountryCode.fromCountryName(user.getCountry()).getCode();
       String canonicalMealName = response.getMealName().toLowerCase().trim().replaceAll("\\s+", "_");
 
-      // 1. If source = "SD" (description-based), check if standard recipe exists in meal_dictionary
       if ("SD".equalsIgnoreCase(sourceOfIntake)) {
         MealDictionaryRecord dbMeal = userIntakeMapper.findMealInDictionary(canonicalMealName);
         if (dbMeal != null) {
@@ -553,60 +521,41 @@ public class VertexAiServiceImpl implements AiService {
           response.setMealName(dbMeal.getDisplayMealName());
 
           List<FoodNutrient> mealNutrients = new ArrayList<>();
-          if (dbMeal.getCaloriesValue() != null) {
+          if (dbMeal.getCaloriesValue() != null)
             mealNutrients.add(new FoodNutrient(NutrientConstants.CALORIES, new Quantity(dbMeal.getCaloriesValue(), dbMeal.getCaloriesUnit())));
-          }
-          if (dbMeal.getProteinValue() != null) {
+          if (dbMeal.getProteinValue() != null)
             mealNutrients.add(new FoodNutrient(NutrientConstants.PROTEIN, new Quantity(dbMeal.getProteinValue(), dbMeal.getProteinUnit())));
-          }
-          if (dbMeal.getTotalCarbohydrateValue() != null) {
+          if (dbMeal.getTotalCarbohydrateValue() != null)
             mealNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_CARBOHYDRATE, new Quantity(dbMeal.getTotalCarbohydrateValue(), dbMeal.getTotalCarbohydrateUnit())));
-          }
-          if (dbMeal.getTotalFatValue() != null) {
+          if (dbMeal.getTotalFatValue() != null)
             mealNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_FAT, new Quantity(dbMeal.getTotalFatValue(), dbMeal.getTotalFatUnit())));
-          }
-          if (dbMeal.getDietaryFiberValue() != null) {
+          if (dbMeal.getDietaryFiberValue() != null)
             mealNutrients.add(new FoodNutrient(NutrientConstants.DIETARY_FIBER, new Quantity(dbMeal.getDietaryFiberValue(), dbMeal.getDietaryFiberUnit())));
-          }
-          if (dbMeal.getTotalSugarsValue() != null) {
+          if (dbMeal.getTotalSugarsValue() != null)
             mealNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_SUGARS, new Quantity(dbMeal.getTotalSugarsValue(), dbMeal.getTotalSugarsUnit())));
-          }
-          if (dbMeal.getSodiumValue() != null) {
+          if (dbMeal.getSodiumValue() != null)
             mealNutrients.add(new FoodNutrient(NutrientConstants.SODIUM, new Quantity(dbMeal.getSodiumValue(), dbMeal.getSodiumUnit())));
-          }
           response.setTotalPlateNutrients(mealNutrients);
 
           if (dbMeal.getRecipeItems() != null && !dbMeal.getRecipeItems().isEmpty()) {
             List<FoodItem> foodItems = new ArrayList<>();
             for (RecipeItem recipeItem : dbMeal.getRecipeItems()) {
-              String itemCanonical = recipeItem.getCanonicalName();
-              String itemName = recipeItem.getName();
-              double portionValue = recipeItem.getValue();
-              String portionUnit = recipeItem.getUnit();
-
               FoodItem foodItem = new FoodItem();
-              foodItem.setCanonicalName(itemCanonical);
-              foodItem.setName(itemName);
-              foodItem.setQuantity(new Quantity(portionValue, portionUnit));
+              foodItem.setCanonicalName(recipeItem.getCanonicalName());
+              foodItem.setName(recipeItem.getName());
+              foodItem.setQuantity(new Quantity(recipeItem.getValue(), recipeItem.getUnit()));
 
-              FoodItemRecord dbFoodItem = userIntakeMapper.findFoodItemByCanonical(itemCanonical);
+              FoodItemRecord dbFoodItem = userIntakeMapper.findFoodItemByCanonical(recipeItem.getCanonicalName());
               if (dbFoodItem != null) {
-                double portionFactor = portionValue / 100.0;
+                double portionFactor = recipeItem.getValue() / 100.0;
                 List<FoodNutrient> itemNutrients = new ArrayList<>();
-                itemNutrients.add(new FoodNutrient(NutrientConstants.CALORIES, new Quantity(
-                    round(safeDouble(dbFoodItem.getCaloriesValuePer100g()) * portionFactor), dbFoodItem.getCaloriesUnit())));
-                itemNutrients.add(new FoodNutrient(NutrientConstants.PROTEIN, new Quantity(
-                    round(safeDouble(dbFoodItem.getProteinValuePer100g()) * portionFactor), dbFoodItem.getProteinUnit())));
-                itemNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_CARBOHYDRATE, new Quantity(
-                    round(safeDouble(dbFoodItem.getTotalCarbohydrateValuePer100g()) * portionFactor), dbFoodItem.getTotalCarbohydrateUnit())));
-                itemNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_FAT, new Quantity(
-                    round(safeDouble(dbFoodItem.getTotalFatValuePer100g()) * portionFactor), dbFoodItem.getTotalFatUnit())));
-                itemNutrients.add(new FoodNutrient(NutrientConstants.DIETARY_FIBER, new Quantity(
-                    round(safeDouble(dbFoodItem.getDietaryFiberValuePer100g()) * portionFactor), dbFoodItem.getDietaryFiberUnit())));
-                itemNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_SUGARS, new Quantity(
-                    round(safeDouble(dbFoodItem.getTotalSugarsValuePer100g()) * portionFactor), dbFoodItem.getTotalSugarsUnit())));
-                itemNutrients.add(new FoodNutrient(NutrientConstants.SODIUM, new Quantity(
-                    round(safeDouble(dbFoodItem.getSodiumValuePer100g()) * portionFactor), dbFoodItem.getSodiumUnit())));
+                itemNutrients.add(new FoodNutrient(NutrientConstants.CALORIES, new Quantity(round(safeDouble(dbFoodItem.getCaloriesValuePer100g()) * portionFactor), dbFoodItem.getCaloriesUnit())));
+                itemNutrients.add(new FoodNutrient(NutrientConstants.PROTEIN, new Quantity(round(safeDouble(dbFoodItem.getProteinValuePer100g()) * portionFactor), dbFoodItem.getProteinUnit())));
+                itemNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_CARBOHYDRATE, new Quantity(round(safeDouble(dbFoodItem.getTotalCarbohydrateValuePer100g()) * portionFactor), dbFoodItem.getTotalCarbohydrateUnit())));
+                itemNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_FAT, new Quantity(round(safeDouble(dbFoodItem.getTotalFatValuePer100g()) * portionFactor), dbFoodItem.getTotalFatUnit())));
+                itemNutrients.add(new FoodNutrient(NutrientConstants.DIETARY_FIBER, new Quantity(round(safeDouble(dbFoodItem.getDietaryFiberValuePer100g()) * portionFactor), dbFoodItem.getDietaryFiberUnit())));
+                itemNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_SUGARS, new Quantity(round(safeDouble(dbFoodItem.getTotalSugarsValuePer100g()) * portionFactor), dbFoodItem.getTotalSugarsUnit())));
+                itemNutrients.add(new FoodNutrient(NutrientConstants.SODIUM, new Quantity(round(safeDouble(dbFoodItem.getSodiumValuePer100g()) * portionFactor), dbFoodItem.getSodiumUnit())));
                 foodItem.setNutrients(itemNutrients);
               }
               foodItems.add(foodItem);
@@ -617,50 +566,34 @@ public class VertexAiServiceImpl implements AiService {
         }
       }
 
-      // 2. For SM (image scan) OR SD when meal was not in meal_dictionary: Loop food items
       List<RecipeItem> recipeItemsForCatalog = new ArrayList<>();
-
       if (response.getAnalyzedFoodItems() != null) {
         for (FoodItem foodItem : response.getAnalyzedFoodItems()) {
           FoodItemRecord dbFoodItem = userIntakeMapper.findFoodItemByAlias(foodItem.getName(), countryCode);
           boolean foundByAlias = (dbFoodItem != null);
-          if (dbFoodItem == null) {
-            dbFoodItem = userIntakeMapper.findFoodItemByCanonical(foodItem.getCanonicalName());
-          }
+          if (dbFoodItem == null) dbFoodItem = userIntakeMapper.findFoodItemByCanonical(foodItem.getCanonicalName());
 
           double actualQuantityValue = foodItem.getQuantity() != null ? foodItem.getQuantity().getValue() : 100.0;
           if (actualQuantityValue <= 0) actualQuantityValue = 100.0;
 
           if (dbFoodItem != null) {
             foodItem.setCanonicalName(dbFoodItem.getCanonicalName());
-            if (foundByAlias) {
-              foodItem.setName(dbFoodItem.getItemName());
-            }
-
+            if (foundByAlias) foodItem.setName(dbFoodItem.getItemName());
             double portionFactor = actualQuantityValue / 100.0;
             List<FoodNutrient> overriddenNutrients = new ArrayList<>();
-            overriddenNutrients.add(new FoodNutrient(NutrientConstants.CALORIES, new Quantity(
-                round(safeDouble(dbFoodItem.getCaloriesValuePer100g()) * portionFactor), dbFoodItem.getCaloriesUnit())));
-            overriddenNutrients.add(new FoodNutrient(NutrientConstants.PROTEIN, new Quantity(
-                round(safeDouble(dbFoodItem.getProteinValuePer100g()) * portionFactor), dbFoodItem.getProteinUnit())));
-            overriddenNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_CARBOHYDRATE,
-                new Quantity(round(safeDouble(dbFoodItem.getTotalCarbohydrateValuePer100g()) * portionFactor),
-                    dbFoodItem.getTotalCarbohydrateUnit())));
-            overriddenNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_FAT, new Quantity(
-                round(safeDouble(dbFoodItem.getTotalFatValuePer100g()) * portionFactor), dbFoodItem.getTotalFatUnit())));
-            overriddenNutrients.add(new FoodNutrient(NutrientConstants.DIETARY_FIBER, new Quantity(
-                round(safeDouble(dbFoodItem.getDietaryFiberValuePer100g()) * portionFactor), dbFoodItem.getDietaryFiberUnit())));
-            overriddenNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_SUGARS, new Quantity(
-                round(safeDouble(dbFoodItem.getTotalSugarsValuePer100g()) * portionFactor), dbFoodItem.getTotalSugarsUnit())));
-            overriddenNutrients.add(new FoodNutrient(NutrientConstants.SODIUM, new Quantity(
-                round(safeDouble(dbFoodItem.getSodiumValuePer100g()) * portionFactor), dbFoodItem.getSodiumUnit())));
+            overriddenNutrients.add(new FoodNutrient(NutrientConstants.CALORIES, new Quantity(round(safeDouble(dbFoodItem.getCaloriesValuePer100g()) * portionFactor), dbFoodItem.getCaloriesUnit())));
+            overriddenNutrients.add(new FoodNutrient(NutrientConstants.PROTEIN, new Quantity(round(safeDouble(dbFoodItem.getProteinValuePer100g()) * portionFactor), dbFoodItem.getProteinUnit())));
+            overriddenNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_CARBOHYDRATE, new Quantity(round(safeDouble(dbFoodItem.getTotalCarbohydrateValuePer100g()) * portionFactor), dbFoodItem.getTotalCarbohydrateUnit())));
+            overriddenNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_FAT, new Quantity(round(safeDouble(dbFoodItem.getTotalFatValuePer100g()) * portionFactor), dbFoodItem.getTotalFatUnit())));
+            overriddenNutrients.add(new FoodNutrient(NutrientConstants.DIETARY_FIBER, new Quantity(round(safeDouble(dbFoodItem.getDietaryFiberValuePer100g()) * portionFactor), dbFoodItem.getDietaryFiberUnit())));
+            overriddenNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_SUGARS, new Quantity(round(safeDouble(dbFoodItem.getTotalSugarsValuePer100g()) * portionFactor), dbFoodItem.getTotalSugarsUnit())));
+            overriddenNutrients.add(new FoodNutrient(NutrientConstants.SODIUM, new Quantity(round(safeDouble(dbFoodItem.getSodiumValuePer100g()) * portionFactor), dbFoodItem.getSodiumUnit())));
             foodItem.setNutrients(overriddenNutrients);
           } else {
-            // Unlisted item in dictionary: Auto-populate food_item_dictionary with verified_ind = false
             double factor = 100.0 / actualQuantityValue;
-            Map<String, Quantity> itemNutrientMap = foodItem.getNutrients() != null ? foodItem.getNutrients().stream()
-                .collect(Collectors.toMap(FoodNutrient::getName, FoodNutrient::getQuantity, (v1, v2) -> v1)) : Collections.emptyMap();
-
+            Map<String, Quantity> itemNutrientMap = foodItem.getNutrients() != null
+                ? foodItem.getNutrients().stream().collect(Collectors.toMap(FoodNutrient::getName, FoodNutrient::getQuantity, (v1, v2) -> v1))
+                : Collections.emptyMap();
             userIntakeMapper.insertOrUpdateFoodItemDictionary(
                 foodItem.getCanonicalName(),
                 round(safeGetNutrientVal(itemNutrientMap, NutrientConstants.CALORIES) * factor), safeGetNutrientUnit(itemNutrientMap, NutrientConstants.CALORIES, "kcal"),
@@ -671,7 +604,7 @@ public class VertexAiServiceImpl implements AiService {
                 round(safeGetNutrientVal(itemNutrientMap, NutrientConstants.TOTAL_SUGARS) * factor), safeGetNutrientUnit(itemNutrientMap, NutrientConstants.TOTAL_SUGARS, "g"),
                 round(safeGetNutrientVal(itemNutrientMap, NutrientConstants.SODIUM) * factor), safeGetNutrientUnit(itemNutrientMap, NutrientConstants.SODIUM, "mg"),
                 0.0, "mg",
-                false // verified_ind = false
+                false
             );
             userIntakeMapper.insertFoodItemAlias(foodItem.getCanonicalName(), countryCode, foodItem.getName());
           }
@@ -680,15 +613,12 @@ public class VertexAiServiceImpl implements AiService {
         recalculateTotalPlateNutrients(response);
       }
 
-      // Auto-populate meal_dictionary with verified_ind = false
-      Map<String, Quantity> plateNutrientMap = response.getTotalPlateNutrients() != null ? response.getTotalPlateNutrients().stream()
-          .collect(Collectors.toMap(FoodNutrient::getName, FoodNutrient::getQuantity, (v1, v2) -> v1)) : Collections.emptyMap();
+      Map<String, Quantity> plateNutrientMap = response.getTotalPlateNutrients() != null
+          ? response.getTotalPlateNutrients().stream().collect(Collectors.toMap(FoodNutrient::getName, FoodNutrient::getQuantity, (v1, v2) -> v1))
+          : Collections.emptyMap();
 
       userIntakeMapper.insertOrUpdateMealDictionary(
-          canonicalMealName,
-          response.getMealName(),
-          recipeItemsForCatalog,
-          1.0, "serving",
+          canonicalMealName, response.getMealName(), recipeItemsForCatalog, 1.0, "serving",
           safeGetNutrientVal(plateNutrientMap, NutrientConstants.CALORIES), safeGetNutrientUnit(plateNutrientMap, NutrientConstants.CALORIES, "kcal"),
           safeGetNutrientVal(plateNutrientMap, NutrientConstants.PROTEIN), safeGetNutrientUnit(plateNutrientMap, NutrientConstants.PROTEIN, "g"),
           safeGetNutrientVal(plateNutrientMap, NutrientConstants.TOTAL_CARBOHYDRATE), safeGetNutrientUnit(plateNutrientMap, NutrientConstants.TOTAL_CARBOHYDRATE, "g"),
@@ -729,5 +659,4 @@ public class VertexAiServiceImpl implements AiService {
     }
     response.setTotalPlateNutrients(plateNutrients.toFoodNutrientList());
   }
-
 }
