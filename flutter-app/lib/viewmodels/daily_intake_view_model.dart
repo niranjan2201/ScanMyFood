@@ -62,6 +62,9 @@ class DailyIntakeViewModel extends BaseViewModel {
   double get carbsGoal => _carbsGoal;
   double get fatGoal => _fatGoal;
 
+  // Deleted Intake IDs (persisted locally so deleted items never reappear)
+  final Set<int> _deletedIntakeIds = {};
+
   // Caching State
   final Map<String, DailyIntakeData> _dailyIntakeCache = {};
   List<DailyIntakeRecord>? _currentDailyIntake;
@@ -100,9 +103,93 @@ class DailyIntakeViewModel extends BaseViewModel {
     required this.notificationService,
     required this.toolClient,
   }) {
-    loadCacheFromDevice();
+    _loadDeletedIds().then((_) {
+      loadCacheFromDevice();
+    });
     loadNutrientGoals();
     _subscribeToMealLogging();
+  }
+
+  Future<void> _loadDeletedIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList('user_deleted_intake_ids') ?? [];
+      for (final s in list) {
+        final id = int.tryParse(s);
+        if (id != null) _deletedIntakeIds.add(id);
+      }
+    } catch (e) {
+      debugPrint("Failed to load deleted intake IDs: $e");
+    }
+  }
+
+  Future<void> _saveDeletedIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        'user_deleted_intake_ids',
+        _deletedIntakeIds.map((id) => id.toString()).toList(),
+      );
+    } catch (e) {
+      debugPrint("Failed to save deleted intake IDs: $e");
+    }
+  }
+
+  void _recomputeNutrientsForSelectedDate() {
+    final String key = _formatDateKey(_selectedDate);
+    final data = _dailyIntakeCache[key];
+    if (data == null) return;
+
+    double totalCalories = 0.0;
+    double totalProtein = 0.0;
+    double totalCarbs = 0.0;
+    double totalFat = 0.0;
+    double totalFiber = 0.0;
+    double totalSugars = 0.0;
+    double totalSodium = 0.0;
+
+    for (var item in data.dailyIntake) {
+      if (item.id != null && _deletedIntakeIds.contains(item.id)) continue;
+      final cal = item.caloriesValue > 0 ? item.caloriesValue : item.energyValue;
+      totalCalories += cal;
+      totalProtein += item.proteinValue;
+      totalCarbs += item.totalCarbohydrateValue;
+      totalFat += item.totalFatValue;
+      totalFiber += item.dietaryFiberValue;
+      totalSugars += item.totalSugarsValue;
+      totalSodium += item.sodiumValue;
+    }
+
+    data.totalNutrients = [
+      FoodNutrient(
+        name: AppConstants.calories,
+        quantity: Quantity(value: totalCalories, unit: 'kcal'),
+      ),
+      FoodNutrient(
+        name: AppConstants.protein,
+        quantity: Quantity(value: totalProtein, unit: 'g'),
+      ),
+      FoodNutrient(
+        name: AppConstants.totalCarbohydrate,
+        quantity: Quantity(value: totalCarbs, unit: 'g'),
+      ),
+      FoodNutrient(
+        name: AppConstants.totalFat,
+        quantity: Quantity(value: totalFat, unit: 'g'),
+      ),
+      FoodNutrient(
+        name: AppConstants.dietaryFiber,
+        quantity: Quantity(value: totalFiber, unit: 'g'),
+      ),
+      FoodNutrient(
+        name: AppConstants.totalSugars,
+        quantity: Quantity(value: totalSugars, unit: 'g'),
+      ),
+      FoodNutrient(
+        name: AppConstants.sodium,
+        quantity: Quantity(value: totalSodium, unit: 'mg'),
+      ),
+    ];
   }
 
   Future<void> loadNutrientGoals() async {
@@ -159,29 +246,34 @@ class DailyIntakeViewModel extends BaseViewModel {
 
   Future<bool> deleteIntake(int dailyIntakeId) async {
     final uid = authService.currentUser?.uid ?? "VzvYVBFUlxP0apdJmkGdO0XzDe82";
-    try {
-      setLoading(true);
-      final success = await intakeRepository.deleteIntake(uid, dailyIntakeId);
-      if (success) {
-        // Remove item from cache for all dates
-        for (var dayData in _dailyIntakeCache.values) {
-          dayData.dailyIntake.removeWhere((item) => item.id == dailyIntakeId);
-        }
-        // Update current selected date data
-        _setSelectedDateData();
-        await saveCacheToDevice();
-        // Also refresh intake from backend
-        await refreshDailyIntake();
-        notifyListeners();
-        return true;
-      }
-      return false;
-    } catch (e) {
-      setError("Failed to delete intake: $e");
-      return false;
-    } finally {
-      setLoading(false);
+    
+    // 1. Mark as deleted in persistent set IMMEDIATELY
+    _deletedIntakeIds.add(dailyIntakeId);
+    await _saveDeletedIds();
+
+    // 2. Remove item from in-memory cache for all dates
+    for (var dayData in _dailyIntakeCache.values) {
+      dayData.dailyIntake.removeWhere((item) => item.id == dailyIntakeId);
     }
+
+    // 3. Recompute daily total nutrients for the selected date
+    _recomputeNutrientsForSelectedDate();
+
+    // 4. Update the current displayed list & notify UI immediately!
+    _setSelectedDateData();
+    notifyListeners();
+
+    // 5. Save updated cache to local SQLite database
+    await saveCacheToDevice();
+
+    // 6. Asynchronously notify backend to delete from PostgreSQL database
+    try {
+      await intakeRepository.deleteIntake(uid, dailyIntakeId);
+    } catch (e) {
+      debugPrint("Backend delete notice (item deleted locally): $e");
+    }
+
+    return true;
   }
 
   void _subscribeToMealLogging() {
@@ -281,7 +373,9 @@ class DailyIntakeViewModel extends BaseViewModel {
     final String key = _formatDateKey(_selectedDate);
     final data = _dailyIntakeCache[key];
     if (data != null) {
-      _currentDailyIntake = data.dailyIntake;
+      data.dailyIntake.removeWhere((item) => item.id != null && _deletedIntakeIds.contains(item.id));
+      _currentDailyIntake = List.from(data.dailyIntake);
+      _recomputeNutrientsForSelectedDate();
       _totalNutrientsMap = {
         for (var nutrient in data.totalNutrients) nutrient.name: nutrient
       };
@@ -315,6 +409,10 @@ class DailyIntakeViewModel extends BaseViewModel {
           toDate,
         );
         
+        for (var dayData in output.dailyIntakes) {
+          dayData.dailyIntake.removeWhere((item) => item.id != null && _deletedIntakeIds.contains(item.id));
+        }
+
         final returnedMap = {
           for (var data in output.dailyIntakes) _formatDateKey(data.date): data
         };
@@ -348,6 +446,10 @@ class DailyIntakeViewModel extends BaseViewModel {
           toDate,
         );
         
+        for (var dayData in output.dailyIntakes) {
+          dayData.dailyIntake.removeWhere((item) => item.id != null && _deletedIntakeIds.contains(item.id));
+        }
+
         final returnedMap = {
           for (var data in output.dailyIntakes) _formatDateKey(data.date): data
         };
@@ -462,6 +564,10 @@ class DailyIntakeViewModel extends BaseViewModel {
         date,
         date,
       );
+
+      for (var dayData in output.dailyIntakes) {
+        dayData.dailyIntake.removeWhere((item) => item.id != null && _deletedIntakeIds.contains(item.id));
+      }
       
       final key = _formatDateKey(date);
       if (output.dailyIntakes.isEmpty) {

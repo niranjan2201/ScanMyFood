@@ -46,7 +46,7 @@ class _FoodIntakeDetailSheetViewState extends State<FoodIntakeDetailSheetView> {
     final vm = context.read<UiViewModel>();
     final color = await vm.extractDominantColor(imageUrl);
 
-    if (mounted && color != null) {
+    if (mounted) {
       setState(() {
         _dominantColor = color;
       });

@@ -30,7 +30,7 @@ class UserIntakeOutput {
 
 class DailyIntakeData {
   final DateTime date;
-  final List<FoodNutrient> totalNutrients;
+  List<FoodNutrient> totalNutrients;
   final List<DailyIntakeRecord> dailyIntake;
 
   DailyIntakeData({
