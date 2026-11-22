@@ -18,7 +18,7 @@ import java.util.UUID;
 @ConditionalOnProperty(name = "storage.type", havingValue = "local", matchIfMissing = true)
 public class LocalFileStorageService implements FileStorageService {
 
-    @Value("${storage.local.base-dir}")
+    @Value("${storage.local.base-dir:./uploads}")
     private String baseDir;
 
     @Value("${app.base-url:http://10.0.2.2:8080}")
