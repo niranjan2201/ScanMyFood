@@ -1,4 +1,4 @@
-package com.example.read_the_label
+package com.scanmyfood.app
 
 import io.flutter.embedding.android.FlutterActivity
 

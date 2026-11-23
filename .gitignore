@@ -33,6 +33,8 @@ flutter-app/android/.gradle
 flutter-app/android/captures/
 flutter-app/android/local.properties
 flutter-app/android/key.properties
+flutter-app/android/app/upload-keystore.jks
+flutter-app/android/app/*.jks
 flutter-app/android/**/GeneratedPluginRegistrant.*
 flutter-app/android/app/google-services.json
 

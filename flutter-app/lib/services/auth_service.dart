@@ -9,7 +9,9 @@ import 'package:read_the_label/models/auth_result.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final GoogleSignIn _googleSignIn = GoogleSignIn();
+  final GoogleSignIn _googleSignIn = GoogleSignIn(
+    serverClientId: '259705292402-v9o957jjcsl253hkifj6ugkoam4kck1f.apps.googleusercontent.com',
+  );
 
   /// Exposes the auth state stream for reactive UI updates.
   Stream<User?> authStateChanges() {
