@@ -267,6 +267,9 @@ class AiChatViewModel extends BaseViewModel {
         toolClient: toolClient,
         profile: profile,
         mealScanContext: session.mealContext,
+        onTextChunk: (chunk) {
+          appendAiText(chunk);
+        },
       );
     } finally {
       _isAgentRunning = false;
@@ -276,10 +279,13 @@ class AiChatViewModel extends BaseViewModel {
   }
 
   void appendAiText(String text) {
-    // Check if the last item is ChatItemType.aiText. If so, append to it.
-    // If not, create a new one.
+    if (text.trim().isEmpty) return;
+    // Check if the last item is ChatItemType.aiText. If so, append to it if not duplicate.
     if (_chatItems.isNotEmpty && _chatItems.last.type == ChatItemType.aiText) {
       final lastItem = _chatItems.last;
+      if (lastItem.text == text || lastItem.text.contains(text)) {
+        return; // Already contains this text
+      }
       _chatItems[_chatItems.length - 1] = ChatItem(
         id: lastItem.id,
         type: ChatItemType.aiText,

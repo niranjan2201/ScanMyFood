@@ -43,8 +43,41 @@ public class GetDailyIntakeTool {
         Map<String, Object> response = new LinkedHashMap<>();
         try {
             UserIntakeOutput result = userIntakeService.getUserIntakeRange(userId, start, end);
+            java.util.List<Map<String, Object>> summaryList = new java.util.ArrayList<>();
+            if (result.getDailyIntakes() != null) {
+                for (com.scanmyfood.backend.models.DailyIntakeData day : result.getDailyIntakes()) {
+                    if (day.getDailyIntake() == null || day.getDailyIntake().isEmpty()) {
+                        continue; // Skip days with no logged meals
+                    }
+                    Map<String, Object> daySummary = new LinkedHashMap<>();
+                    daySummary.put("date", day.getDate().toString());
+
+                    Map<String, Object> macros = new LinkedHashMap<>();
+                    if (day.getTotalNutrients() != null) {
+                        for (com.scanmyfood.backend.models.FoodNutrient n : day.getTotalNutrients()) {
+                            if (n.getQuantity() != null && n.getQuantity().getValue() != null && n.getQuantity().getValue() > 0) {
+                                macros.put(n.getName(), n.getQuantity().getValue() + " " + n.getQuantity().getUnit());
+                            }
+                        }
+                    }
+                    daySummary.put("total_nutrients", macros);
+
+                    java.util.List<Map<String, Object>> meals = new java.util.ArrayList<>();
+                    for (com.scanmyfood.backend.models.DailyIntakeRecord record : day.getDailyIntake()) {
+                        Map<String, Object> meal = new LinkedHashMap<>();
+                        meal.put("name", record.getIntakeName());
+                        meal.put("calories", record.getCaloriesValue());
+                        meal.put("protein_g", record.getProteinValue());
+                        meal.put("carbs_g", record.getTotalCarbohydrateValue());
+                        meal.put("fat_g", record.getTotalFatValue());
+                        meals.add(meal);
+                    }
+                    daySummary.put("meals", meals);
+                    summaryList.add(daySummary);
+                }
+            }
             response.put("success", true);
-            response.put("daily_intakes", result.getDailyIntakes());
+            response.put("daily_intakes", summaryList);
         } catch (Exception e) {
             logger.error("Failed to fetch daily intake range for tool: {}", e.getMessage(), e);
             response.put("success", false);

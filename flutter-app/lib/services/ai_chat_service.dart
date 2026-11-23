@@ -79,8 +79,9 @@ class AiChatService {
   }) async {
     final candidateModels = [
       'gemini-3.5-flash-lite',
+      'gemini-flash-latest',
+      'gemini-3.1-flash-lite',
       'gemini-3.5-flash',
-      'gemini-3.8-flash',
     ];
 
     http.Response? lastResponse;
@@ -123,6 +124,7 @@ class AiChatService {
     required ToolExecutionClient toolClient,
     UserProfile? profile,
     String? mealScanContext,
+    void Function(String chunk)? onTextChunk,
   }) async {
     final db = LocalDatabaseService.instance;
     final messageId = const Uuid().v4();
@@ -260,6 +262,7 @@ class AiChatService {
         final aiText = sb.toString().trim();
         if (aiText.isNotEmpty) {
           transport.addChunk(aiText);
+          onTextChunk?.call(aiText);
 
           // Save model response to database
           final aiMessageId = const Uuid().v4();
@@ -271,9 +274,9 @@ class AiChatService {
       }
     } catch (e, stack) {
       logger.e('Error processing message in session $sessionId: $e', e, stack);
-      transport.addChunk(
-        'Sorry, I encountered an error processing your request. Please try again.',
-      );
+      const errorMsg = 'Sorry, I encountered an error processing your request. Please try again.';
+      transport.addChunk(errorMsg);
+      onTextChunk?.call(errorMsg);
     }
   }
 

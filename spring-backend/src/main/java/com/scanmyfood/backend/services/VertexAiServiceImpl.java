@@ -164,11 +164,15 @@ public class VertexAiServiceImpl implements AiService {
     if (parts.isMissingNode() || parts.isEmpty()) {
       throw new IOException("No parts in Gemini response: " + responseBody);
     }
-    // Look for text part
+    // Look for text parts and concatenate all of them
+    StringBuilder sb = new StringBuilder();
     for (JsonNode part : parts) {
       if (part.has("text")) {
-        return part.get("text").asText();
+        sb.append(part.get("text").asText());
       }
+    }
+    if (sb.length() > 0) {
+      return sb.toString();
     }
     throw new IOException("No text part in Gemini response: " + responseBody);
   }
