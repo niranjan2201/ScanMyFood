@@ -666,116 +666,38 @@ class _OnboardingGetstartedScreenState extends State<OnboardingGetstartedScreen>
                                           ],
                                         ),
 
-                                        const SizedBox(height: 24),
-                                        // OR divider
-                                        Row(
-                                          children: [
-                                            Expanded(
-                                              child: Container(
-                                                height: 1,
-                                                color: Colors.white30,
-                                              ),
-                                            ),
-                                            const Padding(
-                                              padding: EdgeInsets.symmetric(
-                                                  horizontal: 16),
-                                              child: Text(
-                                                'OR',
-                                                style: TextStyle(
-                                                  fontFamily: 'Inter',
-                                                  color: Colors.white70,
-                                                  fontWeight: FontWeight.w500,
-                                                ),
-                                              ),
-                                            ),
-                                            Expanded(
-                                              child: Container(
-                                                height: 1,
-                                                color: Colors.white30,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 24),
-
-                                        // Google sign-in button
-                                        ElevatedButton.icon(
-                                          icon: Image.asset(
-                                            'assets/images/google_icon.png',
-                                            height: 20,
-                                            errorBuilder:
-                                                (context, error, stackTrace) {
-                                              return const Icon(
-                                                  Icons.g_mobiledata,
-                                                  color: Colors.black);
-                                            },
-                                          ),
-                                          onPressed: () async {
-                                            final uiViewModel =
-                                                Provider.of<UiViewModel>(
-                                                    context,
-                                                    listen: false);
-
-                                            try {
-                                              uiViewModel.setLoading(true);
-
-                                              final authService =
-                                                  Provider.of<AuthService>(
-                                                      context,
-                                                      listen: false);
-                                              final result = await authService
-                                                  .signInWithGoogle();
-
-                                              if (result.success) {
-                                                logger.i(
-                                                    "Successfully signed in with Google");
-                                              } else {
-                                                if (result.errorType !=
-                                                    AuthErrorType.cancelled) {
-                                                  if (context.mounted) {
-                                                    ScaffoldMessenger.of(
-                                                            context)
-                                                        .showSnackBar(
-                                                      SnackBar(
-                                                        content: Text(result
-                                                                .errorMessage ??
-                                                            "Google Sign-In failed"),
-                                                        backgroundColor:
-                                                            AppColors
-                                                                .secondaryRed,
-                                                      ),
-                                                    );
-                                                  }
-                                                }
-                                              }
-                                            } catch (e) {
-                                              logger.e(
-                                                  "Error during Google sign-in: $e");
-                                            } finally {
-                                              if (context.mounted) {
-                                                uiViewModel.setLoading(false);
-                                              }
-                                            }
-                                          },
-                                          style: ElevatedButton.styleFrom(
-                                            backgroundColor:
-                                                AppColors.primaryWhite,
-                                            minimumSize:
-                                                const Size(double.infinity, 50),
-                                            shape: RoundedRectangleBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(30),
-                                            ),
-                                            padding: const EdgeInsets.all(12),
-                                          ),
-                                          label: Text("Sign in with Google",
-                                              style: AppTextStyles
-                                                  .buttonTextBlack),
-                                        ),
-
                                         // Apple sign-in button (iOS only)
                                         if (!kIsWeb && Platform.isIOS) ...[
-                                          const SizedBox(height: 12),
+                                          const SizedBox(height: 20),
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: Container(
+                                                  height: 1,
+                                                  color: Colors.white30,
+                                                ),
+                                              ),
+                                              const Padding(
+                                                padding: EdgeInsets.symmetric(
+                                                    horizontal: 16),
+                                                child: Text(
+                                                  'OR',
+                                                  style: TextStyle(
+                                                    fontFamily: 'Inter',
+                                                    color: Colors.white70,
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                ),
+                                              ),
+                                              Expanded(
+                                                child: Container(
+                                                  height: 1,
+                                                  color: Colors.white30,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 16),
                                           ElevatedButton.icon(
                                             icon: const Icon(
                                               Icons.apple,

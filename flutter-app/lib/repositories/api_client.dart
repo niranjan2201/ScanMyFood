@@ -14,7 +14,7 @@ class ApiClient {
             dotenv.env['API_BASE_URL'] ??
             const String.fromEnvironment(
               'API_BASE_URL',
-              defaultValue: 'https://scanmyfood-uat.up.railway.app/api',
+              defaultValue: 'https://scanmyfood.up.railway.app/api',
             );
 
   // Get auth token from Firebase

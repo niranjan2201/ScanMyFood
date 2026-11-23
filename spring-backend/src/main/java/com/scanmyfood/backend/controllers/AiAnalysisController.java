@@ -36,7 +36,7 @@ public class AiAnalysisController {
     public ResponseEntity<ApiResponse<ProductAnalysisResponse>> analyzeProductImages(
             @RequestParam("frontImage") MultipartFile frontImage,
             @RequestParam("labelImage") MultipartFile labelImage,
-            @RequestHeader("X-User-Id") String userId) {
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
         log.info("Analyzing product images");
         ProductAnalysisResponse analysis = aiService.analyzeProductImages(frontImage, labelImage, userId);
         log.info("Product images analyzed successfully");

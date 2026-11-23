@@ -53,34 +53,62 @@ public class VertexAiServiceImpl implements AiService {
   // -------------------------------------------------------------------------
 
   /**
-   * Call Gemini REST API with text-only prompt. Returns the text response.
+   * Call Gemini REST API with text-only prompt with automatic model fallback. Returns the text response.
    */
   private String callGeminiText(String prompt, boolean useImageModel) throws IOException, InterruptedException {
-    String url = geminiConfig.getGenerateContentUrl(useImageModel);
+    List<String> modelsToTry = List.of(
+        useImageModel ? geminiConfig.getImageModelName() : geminiConfig.getModelName(),
+        "gemini-3.5-flash-lite",
+        "gemini-flash-latest",
+        "gemini-3.1-flash-lite"
+    );
+
     Map<String, Object> part = Map.of("text", prompt);
     Map<String, Object> content = Map.of("parts", List.of(part));
     Map<String, Object> body = Map.of("contents", List.of(content));
     String bodyJson = objectMapper.writeValueAsString(body);
 
-    HttpRequest request = HttpRequest.newBuilder()
-        .uri(URI.create(url))
-        .header("Content-Type", "application/json")
-        .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
-        .build();
+    IOException lastException = null;
+    Set<String> triedModels = new HashSet<>();
+    for (String model : modelsToTry) {
+      if (model == null || model.isBlank() || !triedModels.add(model)) {
+        continue;
+      }
+      String url = geminiConfig.getUrlForModel(model);
+      try {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
+            .build();
 
-    HttpResponse<String> response = geminiHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
-    if (response.statusCode() != 200) {
-      throw new IOException("Gemini API error " + response.statusCode() + ": " + response.body());
+        HttpResponse<String> response = geminiHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() == 200) {
+          logger.info("Gemini text success with model: {}", model);
+          return extractTextFromGeminiResponse(response.body());
+        } else {
+          logger.warn("Gemini text error with model {}: {} - {}", model, response.statusCode(), response.body());
+          lastException = new IOException("Gemini API error " + response.statusCode() + " (" + model + "): " + response.body());
+        }
+      } catch (IOException e) {
+        logger.warn("Gemini text exception with model {}: {}", model, e.getMessage());
+        lastException = e;
+      }
     }
-    return extractTextFromGeminiResponse(response.body());
+    throw lastException != null ? lastException : new IOException("All Gemini models failed for text generation");
   }
 
   /**
-   * Call Gemini REST API with text + one or more image parts. Returns text response.
+   * Call Gemini REST API with text + one or more image parts with automatic model fallback. Returns text response.
    */
   private String callGeminiMultimodal(String prompt, List<MultipartFile> images, boolean useImageModel)
       throws IOException, InterruptedException {
-    String url = geminiConfig.getGenerateContentUrl(useImageModel);
+    List<String> modelsToTry = List.of(
+        useImageModel ? geminiConfig.getImageModelName() : geminiConfig.getModelName(),
+        "gemini-3.5-flash-lite",
+        "gemini-flash-latest",
+        "gemini-3.1-flash-lite"
+    );
 
     List<Map<String, Object>> parts = new ArrayList<>();
     parts.add(Map.of("text", prompt));
@@ -93,17 +121,34 @@ public class VertexAiServiceImpl implements AiService {
     Map<String, Object> body = Map.of("contents", List.of(content));
     String bodyJson = objectMapper.writeValueAsString(body);
 
-    HttpRequest request = HttpRequest.newBuilder()
-        .uri(URI.create(url))
-        .header("Content-Type", "application/json")
-        .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
-        .build();
+    IOException lastException = null;
+    Set<String> triedModels = new HashSet<>();
+    for (String model : modelsToTry) {
+      if (model == null || model.isBlank() || !triedModels.add(model)) {
+        continue;
+      }
+      String url = geminiConfig.getUrlForModel(model);
+      try {
+        HttpRequest request = HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(bodyJson))
+            .build();
 
-    HttpResponse<String> response = geminiHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
-    if (response.statusCode() != 200) {
-      throw new IOException("Gemini API error " + response.statusCode() + ": " + response.body());
+        HttpResponse<String> response = geminiHttpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() == 200) {
+          logger.info("Gemini multimodal success with model: {}", model);
+          return extractTextFromGeminiResponse(response.body());
+        } else {
+          logger.warn("Gemini multimodal error with model {}: {} - {}", model, response.statusCode(), response.body());
+          lastException = new IOException("Gemini API error " + response.statusCode() + " (" + model + "): " + response.body());
+        }
+      } catch (IOException e) {
+        logger.warn("Gemini multimodal exception with model {}: {}", model, e.getMessage());
+        lastException = e;
+      }
     }
-    return extractTextFromGeminiResponse(response.body());
+    throw lastException != null ? lastException : new IOException("All Gemini models failed for multimodal generation");
   }
 
   /**

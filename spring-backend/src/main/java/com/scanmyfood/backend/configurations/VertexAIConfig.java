@@ -48,5 +48,9 @@ public class VertexAIConfig {
             String model = useImageModel ? imageModelName : modelName;
             return "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
         }
+
+        public String getUrlForModel(String model) {
+            return "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
+        }
     }
 }
