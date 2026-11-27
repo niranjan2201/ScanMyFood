@@ -16,6 +16,7 @@ import com.scanmyfood.backend.constants.NutrientConstants;
 import com.scanmyfood.backend.dto.HealthConditionDto;
 import com.scanmyfood.backend.mapper.UserIntakeMapper;
 import com.scanmyfood.backend.models.*;
+import com.scanmyfood.backend.services.nutrition.NutritionCalculationService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,6 +48,9 @@ public class VertexAiServiceImpl implements AiService {
 
   @Autowired
   private UserIntakeMapper userIntakeMapper;
+
+  @Autowired
+  private NutritionCalculationService nutritionCalculationService;
 
   // -------------------------------------------------------------------------
   // Core REST helper: call Gemini Developer API
@@ -347,7 +351,9 @@ public class VertexAiServiceImpl implements AiService {
 
       StringBuilder promptBuilder = new StringBuilder();
       promptBuilder.append(String.format("USER REGION/COUNTRY: %s\n\n", country));
-      promptBuilder.append("Analyze this food image and break down each visible food item.\n");
+      promptBuilder.append("Analyze this food image. Break down each visible food component into individual items.\n");
+      promptBuilder.append("IMPORTANT: For mixed dishes (e.g. Rajma Chawal, Dal Chawal, Thali), DECOMPOSE into visible constituent components (e.g., 'cooked_white_rice', 'rajma_curry', 'salad') rather than a single generic entry.\n");
+      promptBuilder.append("Identify cooking fat assumptions (e.g. ghee, butter, cooking oil) if visible or standard in preparation.\n");
       if (description != null && !description.trim().isEmpty()) {
         promptBuilder.append(String.format(
             "User's description/context: \"%s\". Use this to guide identification and portion estimation.\n",
@@ -361,34 +367,16 @@ public class VertexAiServiceImpl implements AiService {
                 "analyzed_food_items": [
                   {
                     "name": "Regional Name of the food item",
-                    "canonical_name": "Unique lowercase snake_case English name, e.g., 'roti', 'idli', 'basmati_rice'",
-                    "quantity": {"value": 0, "unit": "g"},
-                    "nutrients": [
-                      {"name": "calories", "quantity": {"value": 0, "unit": "kcal"}},
-                      {"name": "protein", "quantity": {"value": 0, "unit": "g"}},
-                      {"name": "total_carbohydrate", "quantity": {"value": 0, "unit": "g"}},
-                      {"name": "total_fat", "quantity": {"value": 0, "unit": "g"}},
-                      {"name": "dietary_fiber", "quantity": {"value": 0, "unit": "g"}},
-                      {"name": "total_sugars", "quantity": {"value": 0, "unit": "g"}},
-                      {"name": "sodium", "quantity": {"value": 0, "unit": "mg"}}
-                    ]
+                    "canonical_name": "Unique lowercase snake_case English name, e.g., 'cooked_white_rice', 'roti', 'rajma_curry', 'dal_tadka'",
+                    "quantity": {"value": 0, "unit": "g"}
                   }
-                ],
-                "total_plate_nutrients": [
-                  {"name": "calories", "quantity": {"value": 0, "unit": "kcal"}},
-                  {"name": "protein", "quantity": {"value": 0, "unit": "g"}},
-                  {"name": "total_carbohydrate", "quantity": {"value": 0, "unit": "g"}},
-                  {"name": "total_fat", "quantity": {"value": 0, "unit": "g"}},
-                  {"name": "dietary_fiber", "quantity": {"value": 0, "unit": "g"}},
-                  {"name": "total_sugars", "quantity": {"value": 0, "unit": "g"}},
-                  {"name": "sodium", "quantity": {"value": 0, "unit": "mg"}}
                 ]
               }
 
               Rules:
-              1. Use visual cues to estimate portions
-              2. Provide nutrients for the estimated total quantity of each food item
-              3. Use USDA FoodData Central values where possible
+              1. Use visual cues to estimate portion weights in grams (or standard units like pieces or cups).
+              2. For mixed meals, identify individual components separately.
+              3. Distinguish cooked vs raw state in canonical_name (e.g. 'cooked_white_rice' vs 'raw_white_rice').
               4. LOCALIZATION: Return meal_name and food item names in the most common localized names for user's region (%s).
               """,
           country));
@@ -397,6 +385,8 @@ public class VertexAiServiceImpl implements AiService {
       String responseText = callGeminiMultimodal(prompt, List.of(imageFile), false);
       String jsonString = extractJsonString(responseText);
       FoodAnalysisResponse responseObj = objectMapper.readValue(jsonString, FoodAnalysisResponse.class);
+      // Deterministic nutrition calculation in Java using verified reference data (IFCT / USDA)
+      responseObj = nutritionCalculationService.calculatePlateNutrients(responseObj);
       enrichFoodAnalysisResponse(responseObj, userId, "SM");
       return responseObj;
 
@@ -423,51 +413,34 @@ public class VertexAiServiceImpl implements AiService {
       String prompt = """
           USER REGION/COUNTRY: %s
 
-          You are a highly qualified nutritionist. Analyze these food items (consider cooked form where applicable) and their quantities:
+          You are a qualified nutritional assistant. Analyze these food items (consider cooked form where applicable) and their quantities:
 
           %s
 
-          Generate nutritional info for each food item and respond in this JSON schema:
+          Break down the food items and respond in this strict JSON schema:
           {
             "meal_name": "Name of the food item/meal",
             "analyzed_food_items": [
               {
                 "name": "Regional Name of the food item",
-                "canonical_name": "Unique lowercase snake_case English name, e.g., 'roti', 'idli', 'basmati_rice'",
-                "quantity": {"value": 0, "unit": "g"},
-                "nutrients": [
-                  {"name": "calories", "quantity": {"value": 0, "unit": "kcal"}},
-                  {"name": "protein", "quantity": {"value": 0, "unit": "g"}},
-                  {"name": "total_carbohydrate", "quantity": {"value": 0, "unit": "g"}},
-                  {"name": "total_fat", "quantity": {"value": 0, "unit": "g"}},
-                  {"name": "dietary_fiber", "quantity": {"value": 0, "unit": "g"}},
-                  {"name": "total_sugars", "quantity": {"value": 0, "unit": "g"}},
-                  {"name": "sodium", "quantity": {"value": 0, "unit": "mg"}}
-                ]
+                "canonical_name": "Unique lowercase snake_case English name, e.g., 'roti', 'idli', 'cooked_white_rice', 'dal_tadka'",
+                "quantity": {"value": 0, "unit": "g"}
               }
-            ],
-            "total_plate_nutrients": [
-              {"name": "calories", "quantity": {"value": 0, "unit": "kcal"}},
-              {"name": "protein", "quantity": {"value": 0, "unit": "g"}},
-              {"name": "total_carbohydrate", "quantity": {"value": 0, "unit": "g"}},
-              {"name": "total_fat", "quantity": {"value": 0, "unit": "g"}},
-              {"name": "dietary_fiber", "quantity": {"value": 0, "unit": "g"}},
-              {"name": "total_sugars", "quantity": {"value": 0, "unit": "g"}},
-              {"name": "sodium", "quantity": {"value": 0, "unit": "mg"}}
             ]
           }
 
           Rules:
-          1. Use USDA FoodData Central values, or EFSA if unavailable.
-          2. Convert all measurements to g or ml. If unit not specified, assume grams.
-          3. Round all nutritional values to one decimal place.
-          4. LOCALIZATION: Return meal_name and food item names using the most common localized names for user's region (%s).
+          1. Distinguish between cooked vs raw state in canonical_name (e.g., 'cooked_white_rice' vs 'raw_white_rice').
+          2. Convert measurements to standard units (g, ml, piece, cup, tbsp). If unit not specified, assume grams or pieces as appropriate.
+          3. LOCALIZATION: Return meal_name and food item names using the most common localized names for user's region (%s).
           """
           .formatted(country, description, country);
 
       String responseText = callGeminiText(prompt, false);
       String jsonString = extractJsonString(responseText);
       FoodAnalysisResponse responseObj = objectMapper.readValue(jsonString, FoodAnalysisResponse.class);
+      // Deterministic nutrition calculation in Java using verified reference data (IFCT / USDA)
+      responseObj = nutritionCalculationService.calculatePlateNutrients(responseObj);
       enrichFoodAnalysisResponse(responseObj, userId, "SD");
       return responseObj;
 
@@ -625,7 +598,7 @@ public class VertexAiServiceImpl implements AiService {
           double actualQuantityValue = foodItem.getQuantity() != null ? foodItem.getQuantity().getValue() : 100.0;
           if (actualQuantityValue <= 0) actualQuantityValue = 100.0;
 
-          if (dbFoodItem != null) {
+          if (dbFoodItem != null && Boolean.TRUE.equals(dbFoodItem.getVerifiedInd())) {
             foodItem.setCanonicalName(dbFoodItem.getCanonicalName());
             if (foundByAlias) foodItem.setName(dbFoodItem.getItemName());
             double portionFactor = actualQuantityValue / 100.0;
@@ -639,23 +612,8 @@ public class VertexAiServiceImpl implements AiService {
             overriddenNutrients.add(new FoodNutrient(NutrientConstants.SODIUM, new Quantity(round(safeDouble(dbFoodItem.getSodiumValuePer100g()) * portionFactor), dbFoodItem.getSodiumUnit())));
             foodItem.setNutrients(overriddenNutrients);
           } else {
-            double factor = 100.0 / actualQuantityValue;
-            Map<String, Quantity> itemNutrientMap = foodItem.getNutrients() != null
-                ? foodItem.getNutrients().stream().collect(Collectors.toMap(FoodNutrient::getName, FoodNutrient::getQuantity, (v1, v2) -> v1))
-                : Collections.emptyMap();
-            userIntakeMapper.insertOrUpdateFoodItemDictionary(
-                foodItem.getCanonicalName(),
-                round(safeGetNutrientVal(itemNutrientMap, NutrientConstants.CALORIES) * factor), safeGetNutrientUnit(itemNutrientMap, NutrientConstants.CALORIES, "kcal"),
-                round(safeGetNutrientVal(itemNutrientMap, NutrientConstants.PROTEIN) * factor), safeGetNutrientUnit(itemNutrientMap, NutrientConstants.PROTEIN, "g"),
-                round(safeGetNutrientVal(itemNutrientMap, NutrientConstants.TOTAL_CARBOHYDRATE) * factor), safeGetNutrientUnit(itemNutrientMap, NutrientConstants.TOTAL_CARBOHYDRATE, "g"),
-                round(safeGetNutrientVal(itemNutrientMap, NutrientConstants.TOTAL_FAT) * factor), safeGetNutrientUnit(itemNutrientMap, NutrientConstants.TOTAL_FAT, "g"),
-                round(safeGetNutrientVal(itemNutrientMap, NutrientConstants.DIETARY_FIBER) * factor), safeGetNutrientUnit(itemNutrientMap, NutrientConstants.DIETARY_FIBER, "g"),
-                round(safeGetNutrientVal(itemNutrientMap, NutrientConstants.TOTAL_SUGARS) * factor), safeGetNutrientUnit(itemNutrientMap, NutrientConstants.TOTAL_SUGARS, "g"),
-                round(safeGetNutrientVal(itemNutrientMap, NutrientConstants.SODIUM) * factor), safeGetNutrientUnit(itemNutrientMap, NutrientConstants.SODIUM, "mg"),
-                0.0, "mg",
-                false
-            );
-            userIntakeMapper.insertFoodItemAlias(foodItem.getCanonicalName(), countryCode, foodItem.getName());
+            // Keep deterministic verified reference calculations; do NOT poison database with unverified guesses
+            logger.debug("Item '{}' calculated from reference provider, preserving verified values without DB overwrite", foodItem.getCanonicalName());
           }
           recipeItemsForCatalog.add(new RecipeItem(foodItem.getCanonicalName(), foodItem.getName(), actualQuantityValue, foodItem.getQuantity() != null ? foodItem.getQuantity().getUnit() : "g"));
         }

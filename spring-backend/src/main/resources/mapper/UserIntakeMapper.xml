@@ -100,7 +100,8 @@
             fid.dietary_fiber_value_per_100g AS dietaryFiberValuePer100g, fid.dietary_fiber_unit AS dietaryFiberUnit,
             fid.total_sugars_value_per_100g AS totalSugarsValuePer100g, fid.total_sugars_unit AS totalSugarsUnit,
             fid.sodium_value_per_100g AS sodiumValuePer100g, fid.sodium_unit AS sodiumUnit,
-            fid.iron_value_per_100g AS ironValuePer100g, fid.iron_unit AS ironUnit
+            fid.iron_value_per_100g AS ironValuePer100g, fid.iron_unit AS ironUnit,
+            fid.verified_ind AS verifiedInd
         FROM food_item fi
         LEFT JOIN food_item_dictionary fid ON fi.canonical_name = fid.canonical_name
         LEFT JOIN food_item_alias fia ON fi.canonical_name = fia.canonical_name AND fia.country_code = #{countryCode}
@@ -193,7 +194,8 @@
             fid.dietary_fiber_value_per_100g AS dietaryFiberValuePer100g, fid.dietary_fiber_unit AS dietaryFiberUnit,
             fid.total_sugars_value_per_100g AS totalSugarsValuePer100g, fid.total_sugars_unit AS totalSugarsUnit,
             fid.sodium_value_per_100g AS sodiumValuePer100g, fid.sodium_unit AS sodiumUnit,
-            fid.iron_value_per_100g AS ironValuePer100g, fid.iron_unit AS ironUnit
+            fid.iron_value_per_100g AS ironValuePer100g, fid.iron_unit AS ironUnit,
+            fid.verified_ind AS verifiedInd
         FROM food_item_dictionary fid 
         INNER JOIN food_item_alias fia ON fid.canonical_name = fia.canonical_name
         WHERE LOWER(fia.display_name) = LOWER(#{displayName}) AND fia.country_code = #{countryCode}
@@ -212,7 +214,8 @@
             dietary_fiber_value_per_100g AS dietaryFiberValuePer100g, dietary_fiber_unit AS dietaryFiberUnit,
             total_sugars_value_per_100g AS totalSugarsValuePer100g, total_sugars_unit AS totalSugarsUnit,
             sodium_value_per_100g AS sodiumValuePer100g, sodium_unit AS sodiumUnit,
-            iron_value_per_100g AS ironValuePer100g, iron_unit AS ironUnit
+            iron_value_per_100g AS ironValuePer100g, iron_unit AS ironUnit,
+            verified_ind AS verifiedInd
         FROM food_item_dictionary
         WHERE canonical_name = #{canonicalName}
         LIMIT 1

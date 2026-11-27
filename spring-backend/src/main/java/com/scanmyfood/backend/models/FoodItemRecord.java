@@ -39,5 +39,6 @@ public class FoodItemRecord {
     private String quantityUnit;
     private Integer dailyIntakeId;
     private Double portion = 1.0;
+    private Boolean verifiedInd;
     private LocalDateTime createdTs;
 }

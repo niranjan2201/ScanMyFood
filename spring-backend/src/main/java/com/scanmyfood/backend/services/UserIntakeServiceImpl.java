@@ -183,22 +183,39 @@ public class UserIntakeServiceImpl implements UserIntakeService {
                     .stream()
                     .collect(Collectors.toMap(
                             Nutrient::getName,
-                            Nutrient::getQuantity
+                            Nutrient::getQuantity,
+                            (v1, v2) -> v1
                     ));
 
-            // Normalize nutrients to per 100g
+            // Normalize nutrients to per 100g based on serving size (or total quantity if serving size not provided)
+            Quantity servingSize = productAnalysis.getNutritionAnalysis().getServingSize();
             Quantity totalQuantity = productAnalysis.getNutritionAnalysis().getTotalQuantity();
-            double factor = 100.0 / totalQuantity.getValue();
+
+            double servingVal = (servingSize != null && servingSize.getValue() != null && servingSize.getValue() > 0)
+                    ? servingSize.getValue() : 100.0;
+            String servingUnit = (servingSize != null && servingSize.getUnit() != null) ? servingSize.getUnit() : "g";
+
+            double totalQtyVal = (totalQuantity != null && totalQuantity.getValue() != null && totalQuantity.getValue() > 0)
+                    ? totalQuantity.getValue() : servingVal;
+            String totalQtyUnit = (totalQuantity != null && totalQuantity.getUnit() != null) ? totalQuantity.getUnit() : servingUnit;
+
+            double factor = 100.0 / servingVal;
+
+            Double energyVal = safeGetNutrientValue(nutrientMap, ENERGY);
+            if (energyVal == null) energyVal = safeGetNutrientValue(nutrientMap, CALORIES);
+            String energyUnit = safeGetNutrientUnit(nutrientMap, ENERGY);
+            if (energyUnit == null) energyUnit = safeGetNutrientUnit(nutrientMap, CALORIES);
+            if (energyUnit == null) energyUnit = "kcal";
 
             // Insert product label (reusable product information)
             Integer productLabelId = userIntakeMapper.insertProductLabel(
                     productAnalysis.getProduct().getName(),
                     productAnalysis.getProduct().getCategory(),
-                    totalQuantity.getValue(),
-                    totalQuantity.getUnit(),
-                    productAnalysis.getNutritionAnalysis().getServingSize().getValue(),
-                    productAnalysis.getNutritionAnalysis().getServingSize().getUnit(),
-                    round(safeDouble(safeGetNutrientValue(nutrientMap, ENERGY)) * factor), safeGetNutrientUnit(nutrientMap, ENERGY),
+                    totalQtyVal,
+                    totalQtyUnit,
+                    servingVal,
+                    servingUnit,
+                    round(safeDouble(energyVal) * factor), energyUnit,
                     round(safeDouble(safeGetNutrientValue(nutrientMap, PROTEIN)) * factor), safeGetNutrientUnit(nutrientMap, PROTEIN),
                     round(safeDouble(safeGetNutrientValue(nutrientMap, TOTAL_CARBOHYDRATE)) * factor), safeGetNutrientUnit(nutrientMap, TOTAL_CARBOHYDRATE),
                     round(safeDouble(safeGetNutrientValue(nutrientMap, TOTAL_FAT)) * factor), safeGetNutrientUnit(nutrientMap, TOTAL_FAT),
@@ -225,6 +242,36 @@ public class UserIntakeServiceImpl implements UserIntakeService {
                     scannedLabelInput.getUserId(),
                     scannedLabelInput.getCreatedAt(),
                     scannedLabelInput.getCreatedAt()
+            );
+
+            // Insert food_item record so Daily Intake range queries and summaries retrieve this item
+            String productName = (productAnalysis.getProduct() != null && productAnalysis.getProduct().getName() != null)
+                    ? productAnalysis.getProduct().getName() : "Packaged Food";
+            String canonicalName = productName.toLowerCase().replaceAll("[^a-z0-9\\s-]", "").trim().replaceAll("[\\s-]+", "_");
+            if (canonicalName.isEmpty()) canonicalName = "packaged_food";
+
+            userIntakeMapper.insertFoodItem(
+                    dailyIntakeId,
+                    productName,
+                    canonicalName,
+                    servingVal,
+                    servingUnit,
+                    1.0,
+                    scannedLabelInput.getCreatedAt()
+            );
+
+            // Save verified per-100g product label nutrients to food_item_dictionary
+            userIntakeMapper.insertOrUpdateFoodItemDictionary(
+                    canonicalName,
+                    round(safeDouble(energyVal) * factor), energyUnit,
+                    round(safeDouble(safeGetNutrientValue(nutrientMap, PROTEIN)) * factor), safeGetNutrientUnit(nutrientMap, PROTEIN),
+                    round(safeDouble(safeGetNutrientValue(nutrientMap, TOTAL_CARBOHYDRATE)) * factor), safeGetNutrientUnit(nutrientMap, TOTAL_CARBOHYDRATE),
+                    round(safeDouble(safeGetNutrientValue(nutrientMap, TOTAL_FAT)) * factor), safeGetNutrientUnit(nutrientMap, TOTAL_FAT),
+                    round(safeDouble(safeGetNutrientValue(nutrientMap, DIETARY_FIBER)) * factor), safeGetNutrientUnit(nutrientMap, DIETARY_FIBER),
+                    round(safeDouble(safeGetNutrientValue(nutrientMap, TOTAL_SUGARS)) * factor), safeGetNutrientUnit(nutrientMap, TOTAL_SUGARS),
+                    round(safeDouble(safeGetNutrientValue(nutrientMap, SODIUM)) * factor), safeGetNutrientUnit(nutrientMap, SODIUM),
+                    round(safeDouble(safeGetNutrientValue(nutrientMap, IRON)) * factor), safeGetNutrientUnit(nutrientMap, IRON),
+                    true
             );
 
             // Store primary concerns and recommendations

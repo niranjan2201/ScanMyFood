@@ -94,6 +94,7 @@ spring-backend/src/main/resources/seed*.sql
 *.code-workspace
 # Documentation and help files (optional)
 HELP.md
+testers.csv
 flutter-app/android/.settings/org.eclipse.buildship.core.prefs
 
 # Postman
