@@ -207,6 +207,17 @@ public class UserIntakeServiceImpl implements UserIntakeService {
             if (energyUnit == null) energyUnit = safeGetNutrientUnit(nutrientMap, CALORIES);
             if (energyUnit == null) energyUnit = "kcal";
 
+            // Log diagnostic info to help debug label reading issues
+            logger.info("Scan Label save: product='{}', servingVal={}{}, totalQtyVal={}{}, factor={}, energyVal={} {}",
+                    productAnalysis.getProduct() != null ? productAnalysis.getProduct().getName() : "null",
+                    servingVal, servingUnit, totalQtyVal, totalQtyUnit, factor, energyVal, energyUnit);
+            if (energyVal == null || energyVal == 0.0) {
+                logger.warn("Scan Label: energy value is 0 or null for product '{}'. " +
+                        "Gemini may not have read the label correctly. All nutrient values: {}",
+                        productAnalysis.getProduct() != null ? productAnalysis.getProduct().getName() : "null",
+                        nutrientMap);
+            }
+
             // Insert product label (reusable product information)
             Integer productLabelId = userIntakeMapper.insertProductLabel(
                     productAnalysis.getProduct().getName(),

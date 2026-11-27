@@ -273,22 +273,24 @@ public class VertexAiServiceImpl implements AiService {
       String prompt = """
           %s
 
-          Analyze the food product, product name and its nutrition label. Provide response in this strict JSON format:
+          You are a precise nutrition label reader. Analyze the food product label image carefully.
+          Read EXACT numeric values printed on the label — DO NOT guess or invent values.
+          Provide response in this strict JSON format:
           {
             "product": {
-              "name": "Product name from front image",
-              "category": "Food category (e.g., snack, beverage, etc.)"
+              "name": "Exact product name from front image",
+              "category": "Food category (e.g., snack, beverage, supplement, etc.)"
             },
             "nutrition_analysis": {
-              "total_quantity": {"value": 0, "unit": "unit in packet"},
-              "serving_size": {"value": 0, "unit": "unit in packet"},
+              "total_quantity": {"value": 0.0, "unit": "g or ml"},
+              "serving_size": {"value": 0.0, "unit": "g or ml"},
               "nutrients": [
                 {
                   "name": "nutrient name in snake_case from the list below",
-                  "quantity": {"value": "Quantity of nutrient in per serving of food product", "unit": "unit in packet"},
-                  "daily_value": 0,
+                  "quantity": {"value": 0.0, "unit": "g, mg, mcg, or kcal"},
+                  "daily_value": 0.0,
                   "dv_status": "High/Moderate/Low based on calculated DV%%",
-                  "goal": "Goal of consumption of a nutrient can be - 'At least' or 'Less than' based on recommended DV%%",
+                  "goal": "'At least' or 'Less than'",
                   "health_impact": "Good/Moderate/Bad"
                 }
               ],
@@ -308,20 +310,17 @@ public class VertexAiServiceImpl implements AiService {
             }
           }
 
-          Strictly follow these rules:
-          1. MUST include ALL nutrients from this list: %s
-          2. If a nutrient is not found on the label, set its value to 0.0 and use standard unit
-          3. Extract total nutrient (e.g., Total Sugars, Total Fat) and its sub-nutrients if mentioned
-          4. Calculate DV%% using these reference values: %s
-             Formula: (nutrient_quantity_per_serving / daily_value_reference) × 100
-          5. Return calculated DV%% in double, not the ones found in label
-          6. Do not include any extra characters or formatting outside of the JSON object
-          7. Use accurate escape sequences for any special characters
-          8. For primary_concerns, focus on major nutritional imbalances
-          9. For recommendations suggest complementary foods
-          10. Use %%DV guidelines: 5%% DV or less is Low, 20%% DV or more is High, between is Moderate
-          11. For health_impact: 'At least' nutrients - High=Good, Moderate=Moderate, Low=Bad; 'Less than' nutrients - Low=Good, Moderate=Moderate, High=Bad
-          12. PERSONALIZATION: Tailor primary_concerns to user's health conditions, goal, and BMI. Suggest regionally appropriate foods.
+          CRITICAL RULES — follow strictly:
+          1. For "value" in quantity, ALWAYS use a JSON NUMBER (e.g. 25.5), NEVER a string.
+          2. For "value" in total_quantity and serving_size, ALWAYS use a JSON NUMBER.
+          3. MUST include ALL nutrients from this list: %s
+          4. Read EXACT values from the label. If a nutrient is not on the label, use 0.0.
+          5. Extract serving size and total package quantity from the label.
+          6. Calculate DV%%%% using: (nutrient_per_serving / reference) × 100. References: %s
+          7. Return calculated DV%%%% as a JSON number, not the printed DV.
+          8. No extra text outside the JSON object.
+          9. Use %%%% DV guidelines: 5%%%% or less = Low, 20%%%% or more = High.
+          10. PERSONALIZATION: Tailor primary_concerns to user health conditions and goals.
           """
           .formatted(userContext, NutrientConstants.ALL_NUTRIENT_NAMES, NutrientConstants.DAILY_VALUES_REFERENCE);
 

@@ -252,7 +252,26 @@
             #{ironValuePer100g}, #{ironUnit},
             COALESCE(#{verifiedInd}, FALSE)
         )
-        ON CONFLICT (canonical_name) DO NOTHING
+        ON CONFLICT (canonical_name) DO UPDATE SET
+            calories_value_per_100g    = EXCLUDED.calories_value_per_100g,
+            calories_unit              = EXCLUDED.calories_unit,
+            protein_value_per_100g     = EXCLUDED.protein_value_per_100g,
+            protein_unit               = EXCLUDED.protein_unit,
+            total_carbohydrate_value_per_100g = EXCLUDED.total_carbohydrate_value_per_100g,
+            total_carbohydrate_unit    = EXCLUDED.total_carbohydrate_unit,
+            total_fat_value_per_100g   = EXCLUDED.total_fat_value_per_100g,
+            total_fat_unit             = EXCLUDED.total_fat_unit,
+            dietary_fiber_value_per_100g = EXCLUDED.dietary_fiber_value_per_100g,
+            dietary_fiber_unit         = EXCLUDED.dietary_fiber_unit,
+            total_sugars_value_per_100g = EXCLUDED.total_sugars_value_per_100g,
+            total_sugars_unit          = EXCLUDED.total_sugars_unit,
+            sodium_value_per_100g      = EXCLUDED.sodium_value_per_100g,
+            sodium_unit                = EXCLUDED.sodium_unit,
+            iron_value_per_100g        = EXCLUDED.iron_value_per_100g,
+            iron_unit                  = EXCLUDED.iron_unit,
+            verified_ind               = EXCLUDED.verified_ind
+        WHERE food_item_dictionary.verified_ind IS DISTINCT FROM TRUE
+           OR EXCLUDED.verified_ind = TRUE
     </insert>
 
     <insert id="insertOrUpdateMealDictionary">
