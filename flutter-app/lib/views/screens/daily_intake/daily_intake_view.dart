@@ -146,9 +146,11 @@ class _DailyIntakeViewState extends State<DailyIntakeView> {
                           height: statusBarHeight + baseExpandedHeight,
                         ),
                       ),
-                      const SliverPadding(
-                        padding: EdgeInsets.only(bottom: 90),
-                        sliver: SliverToBoxAdapter(
+                      SliverPadding(
+                        padding: EdgeInsets.only(
+                          bottom: MediaQuery.of(context).padding.bottom + 130,
+                        ),
+                        sliver: const SliverToBoxAdapter(
                           child: _DailyIntakeContent(),
                         ),
                       ),

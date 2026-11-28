@@ -537,8 +537,8 @@ public class VertexAiServiceImpl implements AiService {
 
       if ("SD".equalsIgnoreCase(sourceOfIntake)) {
         MealDictionaryRecord dbMeal = userIntakeMapper.findMealInDictionary(canonicalMealName);
-        if (dbMeal != null) {
-          logger.info("SD scan: Found standardized recipe in meal_dictionary for {}", dbMeal.getDisplayMealName());
+        if (dbMeal != null && Boolean.TRUE.equals(dbMeal.getVerifiedInd())) {
+          logger.info("SD scan: Found verified recipe in meal_dictionary for {}", dbMeal.getDisplayMealName());
           response.setMealName(dbMeal.getDisplayMealName());
 
           List<FoodNutrient> mealNutrients = new ArrayList<>();
@@ -578,6 +578,16 @@ public class VertexAiServiceImpl implements AiService {
                 itemNutrients.add(new FoodNutrient(NutrientConstants.TOTAL_SUGARS, new Quantity(round(safeDouble(dbFoodItem.getTotalSugarsValuePer100g()) * portionFactor), dbFoodItem.getTotalSugarsUnit())));
                 itemNutrients.add(new FoodNutrient(NutrientConstants.SODIUM, new Quantity(round(safeDouble(dbFoodItem.getSodiumValuePer100g()) * portionFactor), dbFoodItem.getSodiumUnit())));
                 foodItem.setNutrients(itemNutrients);
+              } else {
+                // Ensure item nutrients are always populated via deterministic calculation
+                foodItem = nutritionCalculationService.calculateFoodItemNutrients(
+                    recipeItem.getName(),
+                    recipeItem.getCanonicalName(),
+                    recipeItem.getValue(),
+                    recipeItem.getUnit(),
+                    "COOKED",
+                    1.0
+                );
               }
               foodItems.add(foodItem);
             }
