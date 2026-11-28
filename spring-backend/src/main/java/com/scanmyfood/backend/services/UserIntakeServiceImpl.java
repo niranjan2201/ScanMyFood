@@ -2,6 +2,7 @@ package com.scanmyfood.backend.services;
 
 import com.scanmyfood.backend.mapper.UserIntakeMapper;
 import com.scanmyfood.backend.models.*;
+import com.scanmyfood.backend.services.nutrition.NutritionCalculationService;
 import com.scanmyfood.backend.services.storage.FileStorageService;
 import com.scanmyfood.backend.utils.NutrientSanitizer;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -47,6 +48,9 @@ public class UserIntakeServiceImpl implements UserIntakeService {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private NutritionCalculationService nutritionCalculationService;
 
     @Override
     public int saveScannedFoodIntake(SaveScannedFoodInput saveIntakeInput, String imageAccessUrl) throws Exception {
@@ -127,6 +131,9 @@ public class UserIntakeServiceImpl implements UserIntakeService {
                         itemPortion,
                         saveIntakeInput.getCreatedAt()
                 );
+
+                // Persist per-100g nutrients to food_item_dictionary (verified=false; will not overwrite verified records)
+                persistItemDictionaryIfMissing(canonicalName, qtyVal, qtyUnit, itemPortion, foodItem.getNutrients());
             }
 
             // Publish event
@@ -343,37 +350,22 @@ public class UserIntakeServiceImpl implements UserIntakeService {
             for (DailyIntakeRecord record : records) {
                 List<FoodItem> foodItems = new ArrayList<>();
                 List<FoodItemRecord> foodItemRecords = userIntakeMapper.fetchFoodItemsByDailyIntakeId(record.getId(), countryCode);
+                double mealPortion = record.getPortion() != null ? record.getPortion() : 1.0;
                 for (FoodItemRecord itemRecord : foodItemRecords) {
-                    FoodItem foodItem = new FoodItem();
-                    foodItem.setName(itemRecord.getItemName());
-                    foodItem.setCanonicalName(itemRecord.getCanonicalName());
-                    foodItem.setPortion(itemRecord.getPortion() != null ? itemRecord.getPortion() : 1.0);
-                    double mealPortion = record.getPortion() != null ? record.getPortion() : 1.0;
-                    double itemPortion = itemRecord.getPortion() != null ? itemRecord.getPortion() : 1.0;
-                    double factor = (safeDouble(itemRecord.getQuantityValue()) / 100.0) * itemPortion * mealPortion;
-
-                    foodItem.setQuantity(new Quantity(round(safeDouble(itemRecord.getQuantityValue()) * itemPortion * mealPortion), itemRecord.getQuantityUnit()));
-
-                    List<FoodNutrient> nutrients = new ArrayList<>();
-                    nutrients.add(new FoodNutrient(CALORIES, new Quantity(round(safeDouble(itemRecord.getCaloriesValuePer100g()) * factor), safeUnit(itemRecord.getCaloriesUnit(), "kcal"))));
-                    nutrients.add(new FoodNutrient(PROTEIN, new Quantity(round(safeDouble(itemRecord.getProteinValuePer100g()) * factor), safeUnit(itemRecord.getProteinUnit(), "g"))));
-                    nutrients.add(new FoodNutrient(TOTAL_CARBOHYDRATE, new Quantity(round(safeDouble(itemRecord.getTotalCarbohydrateValuePer100g()) * factor), safeUnit(itemRecord.getTotalCarbohydrateUnit(), "g"))));
-                    nutrients.add(new FoodNutrient(TOTAL_FAT, new Quantity(round(safeDouble(itemRecord.getTotalFatValuePer100g()) * factor), safeUnit(itemRecord.getTotalFatUnit(), "g"))));
-                    nutrients.add(new FoodNutrient(DIETARY_FIBER, new Quantity(round(safeDouble(itemRecord.getDietaryFiberValuePer100g()) * factor), safeUnit(itemRecord.getDietaryFiberUnit(), "g"))));
-                    nutrients.add(new FoodNutrient(TOTAL_SUGARS, new Quantity(round(safeDouble(itemRecord.getTotalSugarsValuePer100g()) * factor), safeUnit(itemRecord.getTotalSugarsUnit(), "g"))));
-                    nutrients.add(new FoodNutrient(SODIUM, new Quantity(round(safeDouble(itemRecord.getSodiumValuePer100g()) * factor), safeUnit(itemRecord.getSodiumUnit(), "mg"))));
-                    
-                    foodItem.setNutrients(nutrients);
+                    FoodItem foodItem = buildFoodItemFromRecord(itemRecord, mealPortion);
                     foodItems.add(foodItem);
 
+                    Map<String, Quantity> itemNutrientMap = foodItem.getNutrients().stream()
+                            .collect(Collectors.toMap(FoodNutrient::getName, FoodNutrient::getQuantity, (v1, v2) -> v1));
+
                     // Aggregate into record
-                    record.setCaloriesValue(round(record.getCaloriesValue() + safeDouble(itemRecord.getCaloriesValuePer100g()) * factor));
-                    record.setProteinValue(round(record.getProteinValue() + safeDouble(itemRecord.getProteinValuePer100g()) * factor));
-                    record.setTotalCarbohydrateValue(round(record.getTotalCarbohydrateValue() + safeDouble(itemRecord.getTotalCarbohydrateValuePer100g()) * factor));
-                    record.setTotalFatValue(round(record.getTotalFatValue() + safeDouble(itemRecord.getTotalFatValuePer100g()) * factor));
-                    record.setDietaryFiberValue(round(record.getDietaryFiberValue() + safeDouble(itemRecord.getDietaryFiberValuePer100g()) * factor));
-                    record.setTotalSugarsValue(round(record.getTotalSugarsValue() + safeDouble(itemRecord.getTotalSugarsValuePer100g()) * factor));
-                    record.setSodiumValue(round(record.getSodiumValue() + safeDouble(itemRecord.getSodiumValuePer100g()) * factor));
+                    record.setCaloriesValue(round(record.getCaloriesValue() + safeDouble(safeGetNutrientValue(itemNutrientMap, CALORIES))));
+                    record.setProteinValue(round(record.getProteinValue() + safeDouble(safeGetNutrientValue(itemNutrientMap, PROTEIN))));
+                    record.setTotalCarbohydrateValue(round(record.getTotalCarbohydrateValue() + safeDouble(safeGetNutrientValue(itemNutrientMap, TOTAL_CARBOHYDRATE))));
+                    record.setTotalFatValue(round(record.getTotalFatValue() + safeDouble(safeGetNutrientValue(itemNutrientMap, TOTAL_FAT))));
+                    record.setDietaryFiberValue(round(record.getDietaryFiberValue() + safeDouble(safeGetNutrientValue(itemNutrientMap, DIETARY_FIBER))));
+                    record.setTotalSugarsValue(round(record.getTotalSugarsValue() + safeDouble(safeGetNutrientValue(itemNutrientMap, TOTAL_SUGARS))));
+                    record.setSodiumValue(round(record.getSodiumValue() + safeDouble(safeGetNutrientValue(itemNutrientMap, SODIUM))));
                 }
                 record.setFoodItems(foodItems);
             }
@@ -435,25 +427,7 @@ public class UserIntakeServiceImpl implements UserIntakeService {
             double mealPortion = intakeRecord.getPortion() != null ? intakeRecord.getPortion() : 1.0;
 
             for (FoodItemRecord record : foodItemRecords) {
-                FoodItem foodItem = new FoodItem();
-                foodItem.setName(record.getItemName());
-                foodItem.setCanonicalName(record.getCanonicalName());
-                double itemPortion = record.getPortion() != null ? record.getPortion() : 1.0;
-                foodItem.setPortion(itemPortion);
-                double factor = (safeDouble(record.getQuantityValue()) / 100.0) * itemPortion * mealPortion;
-                foodItem.setQuantity(new Quantity(round(safeDouble(record.getQuantityValue()) * itemPortion * mealPortion), record.getQuantityUnit()));
-
-                List<FoodNutrient> nutrients = new ArrayList<>();
-                nutrients.add(new FoodNutrient(CALORIES, new Quantity(round(safeDouble(record.getCaloriesValuePer100g()) * factor), safeUnit(record.getCaloriesUnit(), "kcal"))));
-                nutrients.add(new FoodNutrient(PROTEIN, new Quantity(round(safeDouble(record.getProteinValuePer100g()) * factor), safeUnit(record.getProteinUnit(), "g"))));
-                nutrients.add(new FoodNutrient(TOTAL_CARBOHYDRATE, new Quantity(round(safeDouble(record.getTotalCarbohydrateValuePer100g()) * factor), safeUnit(record.getTotalCarbohydrateUnit(), "g"))));
-                nutrients.add(new FoodNutrient(TOTAL_FAT, new Quantity(round(safeDouble(record.getTotalFatValuePer100g()) * factor), safeUnit(record.getTotalFatUnit(), "g"))));
-                nutrients.add(new FoodNutrient(DIETARY_FIBER, new Quantity(round(safeDouble(record.getDietaryFiberValuePer100g()) * factor), safeUnit(record.getDietaryFiberUnit(), "g"))));
-                nutrients.add(new FoodNutrient(TOTAL_SUGARS, new Quantity(round(safeDouble(record.getTotalSugarsValuePer100g()) * factor), safeUnit(record.getTotalSugarsUnit(), "g"))));
-                nutrients.add(new FoodNutrient(SODIUM, new Quantity(round(safeDouble(record.getSodiumValuePer100g()) * factor), safeUnit(record.getSodiumUnit(), "mg"))));
-
-                foodItem.setNutrients(nutrients);
-                foodItems.add(foodItem);
+                foodItems.add(buildFoodItemFromRecord(record, mealPortion));
             }
             intakeResponse.setAnalyzedFoodItems(foodItems);
             recalculateTotalPlateNutrients(intakeResponse);
@@ -461,6 +435,83 @@ public class UserIntakeServiceImpl implements UserIntakeService {
         } catch (Exception exception) {
             throw new Exception("Error fetching user intake", exception);
         }
+    }
+
+    /**
+     * Build a FoodItem from a persisted FoodItemRecord, falling back to NutritionCalculationService
+     * if food_item_dictionary has no entry for the canonical name.
+     */
+    private FoodItem buildFoodItemFromRecord(FoodItemRecord itemRecord, double mealPortion) {
+        double itemPortion = itemRecord.getPortion() != null ? itemRecord.getPortion() : 1.0;
+        double qtyVal = safeDouble(itemRecord.getQuantityValue());
+
+        if (itemRecord.getCaloriesValuePer100g() == null && itemRecord.getProteinValuePer100g() == null) {
+            return nutritionCalculationService.calculateFoodItemNutrients(
+                    itemRecord.getItemName(),
+                    itemRecord.getCanonicalName(),
+                    qtyVal,
+                    itemRecord.getQuantityUnit(),
+                    "COOKED",
+                    itemPortion * mealPortion
+            );
+        }
+
+        FoodItem foodItem = new FoodItem();
+        foodItem.setName(itemRecord.getItemName());
+        foodItem.setCanonicalName(itemRecord.getCanonicalName());
+        foodItem.setPortion(itemPortion);
+
+        double factor = (qtyVal / 100.0) * itemPortion * mealPortion;
+        foodItem.setQuantity(new Quantity(round(qtyVal * itemPortion * mealPortion), itemRecord.getQuantityUnit()));
+
+        List<FoodNutrient> nutrients = new ArrayList<>();
+        nutrients.add(new FoodNutrient(CALORIES, new Quantity(round(safeDouble(itemRecord.getCaloriesValuePer100g()) * factor), safeUnit(itemRecord.getCaloriesUnit(), "kcal"))));
+        nutrients.add(new FoodNutrient(PROTEIN, new Quantity(round(safeDouble(itemRecord.getProteinValuePer100g()) * factor), safeUnit(itemRecord.getProteinUnit(), "g"))));
+        nutrients.add(new FoodNutrient(TOTAL_CARBOHYDRATE, new Quantity(round(safeDouble(itemRecord.getTotalCarbohydrateValuePer100g()) * factor), safeUnit(itemRecord.getTotalCarbohydrateUnit(), "g"))));
+        nutrients.add(new FoodNutrient(TOTAL_FAT, new Quantity(round(safeDouble(itemRecord.getTotalFatValuePer100g()) * factor), safeUnit(itemRecord.getTotalFatUnit(), "g"))));
+        nutrients.add(new FoodNutrient(DIETARY_FIBER, new Quantity(round(safeDouble(itemRecord.getDietaryFiberValuePer100g()) * factor), safeUnit(itemRecord.getDietaryFiberUnit(), "g"))));
+        nutrients.add(new FoodNutrient(TOTAL_SUGARS, new Quantity(round(safeDouble(itemRecord.getTotalSugarsValuePer100g()) * factor), safeUnit(itemRecord.getTotalSugarsUnit(), "g"))));
+        nutrients.add(new FoodNutrient(SODIUM, new Quantity(round(safeDouble(itemRecord.getSodiumValuePer100g()) * factor), safeUnit(itemRecord.getSodiumUnit(), "mg"))));
+
+        foodItem.setNutrients(nutrients);
+        return foodItem;
+    }
+
+    /**
+     * Normalize a food item's scanned/calculated nutrients to per-100g and store in food_item_dictionary
+     * with verified_ind=false (never overwrites verified IFCT/USDA or packaged label records).
+     */
+    private void persistItemDictionaryIfMissing(String canonicalName, double qtyVal, String qtyUnit,
+                                                double itemPortion, List<FoodNutrient> nutrients) {
+        if (nutrients == null || nutrients.isEmpty()) {
+            return;
+        }
+        double grams = nutritionCalculationService.convertToGrams(canonicalName, qtyVal, qtyUnit) * itemPortion;
+        if (grams <= 0) {
+            return;
+        }
+        Map<String, Quantity> map = nutrients.stream()
+                .filter(n -> n != null && n.getName() != null && n.getQuantity() != null)
+                .collect(Collectors.toMap(FoodNutrient::getName, FoodNutrient::getQuantity, (v1, v2) -> v1));
+
+        double calories = safeDouble(safeGetNutrientValue(map, CALORIES));
+        double protein = safeDouble(safeGetNutrientValue(map, PROTEIN));
+        if (calories <= 0 && protein <= 0) {
+            return;
+        }
+        double factor = 100.0 / grams;
+        userIntakeMapper.insertOrUpdateFoodItemDictionary(
+                canonicalName,
+                round(calories * factor), safeUnit(safeGetNutrientUnit(map, CALORIES), "kcal"),
+                round(protein * factor), safeUnit(safeGetNutrientUnit(map, PROTEIN), "g"),
+                round(safeDouble(safeGetNutrientValue(map, TOTAL_CARBOHYDRATE)) * factor), safeUnit(safeGetNutrientUnit(map, TOTAL_CARBOHYDRATE), "g"),
+                round(safeDouble(safeGetNutrientValue(map, TOTAL_FAT)) * factor), safeUnit(safeGetNutrientUnit(map, TOTAL_FAT), "g"),
+                round(safeDouble(safeGetNutrientValue(map, DIETARY_FIBER)) * factor), safeUnit(safeGetNutrientUnit(map, DIETARY_FIBER), "g"),
+                round(safeDouble(safeGetNutrientValue(map, TOTAL_SUGARS)) * factor), safeUnit(safeGetNutrientUnit(map, TOTAL_SUGARS), "g"),
+                round(safeDouble(safeGetNutrientValue(map, SODIUM)) * factor), safeUnit(safeGetNutrientUnit(map, SODIUM), "mg"),
+                round(safeDouble(safeGetNutrientValue(map, IRON)) * factor), safeUnit(safeGetNutrientUnit(map, IRON), "mg"),
+                false
+        );
     }
 
     private void setTotalValues(List<DailyIntakeRecord> records, List<FoodNutrient> totalNutrients) {
